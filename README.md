@@ -13,7 +13,7 @@
 
 <br>
 
-<img src="docs/images/gif-street.gif" alt="An ollie between parked cars, a heelflip over a car and a slam on a downtown street" width="100%">
+<img src="docs/images/gif-hero.gif" alt="Rolling across a plaza at sunset towards the skyline: an ollie, then a heelflip" width="100%">
 
 <img src="docs/images/game-street.jpg" alt="A kickflip in the middle of a downtown street" width="49%">
 <img src="docs/images/game-colonnade-heelflip.jpg" alt="A heelflip under a stone colonnade" width="49%">
