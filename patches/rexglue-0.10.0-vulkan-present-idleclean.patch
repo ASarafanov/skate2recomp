@@ -1,0 +1,114 @@
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+index 696ff48..92cac0e 100644
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -443,6 +443,16 @@ class VulkanCommandProcessor : public CommandProcessor {
+   void InvalidateAllVertexBufferResidency();
+   void InvalidateVertexBufferResidency(uint32_t vfetch_index);
+   void InvalidateVertexBufferResidencyRange(uint32_t first_vfetch, uint32_t last_vfetch);
++  void MaybeSynchronizePresentIdleclean(uint32_t index, uint32_t value);
++
++  struct PresentIdlecleanStats {
++    uint64_t hits = 0;
++    uint64_t synchronized = 0;
++    uint64_t waited = 0;
++    uint64_t skipped = 0;
++    uint64_t waited_us = 0;
++  } present_idleclean_stats_;
++  bool present_idleclean_sync_enabled_ = false;
+   struct ReadbackBuffer {
+     VkBuffer buffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+     VkDeviceMemory memories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 7a7d3fe..f672b15 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <cstdint>
+ #include <cstring>
+ #include <iterator>
+@@ -69,6 +70,12 @@ REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
+                     "device (falls back to render passes otherwise)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(vulkan_present_idleclean_sync, false, "GPU/Vulkan",
++                    "Await submitted rendering for WAIT_UNTIL 3D idle-clean only between closed "
++                    "guest frames (Vulkan counterpart of d3d12_present_idleclean_sync). Other "
++                    "WAIT_UNTIL cases are unchanged.")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ namespace rex::graphics::vulkan {
+ 
+ namespace {
+@@ -775,6 +782,9 @@ bool VulkanCommandProcessor::SetupContext() {
+     return false;
+   }
+   InvalidateAllVertexBufferResidency();
++  // Snapshot once on the command worker; the flag requires a restart.
++  present_idleclean_sync_enabled_ = rex::cvar::Query<bool>("vulkan_present_idleclean_sync");
++  present_idleclean_stats_ = {};
+ 
+   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+@@ -1897,6 +1907,13 @@ bool VulkanCommandProcessor::SetupContext() {
+ }
+ 
+ void VulkanCommandProcessor::ShutdownContext() {
++  if (present_idleclean_stats_.hits) {
++    REXGPU_INFO("Vulkan present idle-clean sync totals: hits={} synchronized={} waited={} "
++                "skipped={} waited_us={}",
++                present_idleclean_stats_.hits, present_idleclean_stats_.synchronized,
++                present_idleclean_stats_.waited, present_idleclean_stats_.skipped,
++                present_idleclean_stats_.waited_us);
++  }
+   AwaitAllQueueOperationsCompletion();
+   InvalidateAllVertexBufferResidency();
+   ShutdownOcclusionQueryResources();
+@@ -2123,8 +2140,43 @@ void VulkanCommandProcessor::ShutdownContext() {
+   CommandProcessor::ShutdownContext();
+ }
+ 
++void VulkanCommandProcessor::MaybeSynchronizePresentIdleclean(uint32_t index, uint32_t value) {
++  // Mirrors the D3D12 present idle-clean patch: at a WAIT_UNTIL with the 3D
++  // idle-clean bit (17), between closed guest frames, wait until everything
++  // already submitted has completed. Partial frames, submissions and scratch
++  // buffer use are left alone, so this never closes or splits a submission.
++  if (index != XE_GPU_REG_WAIT_UNTIL || !(value & (UINT32_C(1) << 17)) ||
++      !present_idleclean_sync_enabled_) {
++    return;
++  }
++  auto& stats = present_idleclean_stats_;
++  ++stats.hits;
++  const uint64_t current = GetCurrentSubmission();
++  if (device_lost_ || current <= 1 || frame_open_ || submission_open_ || scratch_buffer_used_) {
++    ++stats.skipped;
++    return;
++  }
++  const uint64_t target = current - 1;
++  if (submission_completed_ < target) {
++    const auto start = std::chrono::steady_clock::now();
++    // Never pass the current submission: that would end an open submission.
++    CheckSubmissionFenceAndDeviceLoss(target);
++    stats.waited_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::steady_clock::now() - start).count());
++    ++stats.waited;
++  }
++  if (!device_lost_ && submission_completed_ >= target) {
++    ++stats.synchronized;
++    if (stats.synchronized <= 4) {
++      REXGPU_INFO("Vulkan present idle-clean sync: value={:08X} target={} completed={}", value,
++                  target, submission_completed_);
++    }
++  }
++}
++
+ void VulkanCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+   CommandProcessor::WriteRegister(index, value);
++  MaybeSynchronizePresentIdleclean(index, value);
+ 
+   if (index >= XE_GPU_REG_SHADER_CONSTANT_000_X && index <= XE_GPU_REG_SHADER_CONSTANT_511_W) {
+     if (frame_open_) {

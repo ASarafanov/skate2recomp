@@ -108,3 +108,5 @@ Packaging writes a new folder under `packages`, verifies native dependencies and
 Source export writes an explicit allowlist to a new folder under `source-exports`. Original game files, generated game code, binaries, tools, logs, saves, and caches are excluded. `-IncludeGameData` on the packager is for local testing only; packages created with it must not be uploaded.
 
 Complete the [release checklist](RELEASE_CHECKLIST.md) before publishing a player package.
+
+The SDK is built with both Direct3D 12 and Vulkan. `skate2.exe` picks the API with `--skate2_graphics_api=auto|d3d12|vulkan`: `auto` uses Vulkan under Proton/Wine and Direct3D 12 on Windows.

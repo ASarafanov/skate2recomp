@@ -5,6 +5,8 @@
 #include "crash_diagnostics.h"
 #include "automatic_gpu_selection.h"
 #include "frame_rate.h"
+#include "graphics_api.h"
+#include "native_render.h"
 
 #include <rex/rex_app.h>
 #include <rex/cvar.h>
@@ -13,7 +15,10 @@
 #include <rex/perf/counter.h>
 #include <rex/system.h>
 
+#include <fstream>
 #include <system_error>
+
+REXCVAR_DECLARE(std::string, skate2_dump_image);
 
 class Skate2App : public rex::ReXApp {
  public:
@@ -27,14 +32,29 @@ class Skate2App : public rex::ReXApp {
   }
 
  protected:
+  // Debug aid: write the decrypted, decompressed guest image to the file named
+  // by --skate2_dump_image before any game code runs. The dump is retail code
+  // and data: keep it out of the repository.
+  void OnPostLoadXexImage() override {
+    const std::string path = REXCVAR_GET(skate2_dump_image);
+    if (path.empty()) return;
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(runtime()->virtual_membase() +
+                                            PPCImageConfig.image_base),
+              PPCImageConfig.image_size);
+    REXLOG_INFO("Guest image written to {}", path);
+  }
+
   void OnPreLaunchModule() override {
     // Record effective values after GPU-plugin registration for reproducible
     // graphics comparisons. This reads settings once, outside the frame loop.
     for (const auto* flag : {"async_shader_compilation", "readback_resolve",
                             "readback_memexport", "readback_memexport_fast",
-                            "clear_memory_page_state", "render_target_path_d3d12",
+                            "clear_memory_page_state", "skate2_graphics_api",
+                            "render_target_path_d3d12", "render_target_path_vulkan",
                             "vsync", "video_mode_refresh_rate",
-                            "d3d12_present_idleclean_sync", "skate2_frame_rate",
+                            "d3d12_present_idleclean_sync", "vulkan_present_idleclean_sync",
+                            "skate2_frame_rate",
                             "resolution_scale", "draw_resolution_scale_x",
                             "draw_resolution_scale_y"}) {
       REXLOG_INFO("Graphics setting {}={}", flag, rex::cvar::GetFlagByName(flag));
@@ -66,12 +86,19 @@ class Skate2App : public rex::ReXApp {
         rex::cvar::GetFlagSource("render_target_path_d3d12") == rex::cvar::Source::kDefault) {
       rex::cvar::SetFlagByName("render_target_path_d3d12", "rov");
     }
+    // vulkan_present_idleclean_sync stays off by default: waiting for the GPU
+    // at every idle-clean halved the game's real frame rate (33 instead of 58
+    // frames per second in Freeskate on a desktop PC).
     return true;
   }
 
   void OnPreSetup(rex::RuntimeConfig& config) override {
     ConfigureSkate2FrameRate();
     if (config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    // The SDK's own loader asks for "any" backend, which is always Direct3D 12
+    // when it is compiled in. Load the plugin here with the chosen API.
+    if (!config.graphics) config.graphics = LoadSkate2GraphicsPlugin(config.gpu_plugin);
+    InstallSkate2NativeRenderer();
     // Retain the SDK's default SDL input factory for gamepad support.
   }
 

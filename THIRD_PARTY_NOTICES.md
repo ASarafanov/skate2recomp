@@ -2,6 +2,10 @@
 
 This project uses [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) at revision `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2`. Portions derive from [Xenia](https://github.com/xenia-project/xenia). Their notice is included as [ReXGlue-LICENSE.txt](licenses/ReXGlue-LICENSE.txt).
 
+### Skate 2 Recomp SDK patches
+
+`patches/rexglue-0.10.0-native-guest-renderer.patch` ports the native guest-output renderer interface and its Vulkan backend from [mchughalex/rexglue-skate3](https://github.com/mchughalex/rexglue-skate3) (the ReXGlue SDK fork used by [Skate 3 Recomp](https://github.com/mchughalex/skate3recomp)), under the same BSD 3-Clause license as ReXGlue. The other `vulkan-*` and `wine-ui-tick` patches are this project's own.
+
 ## Dependency notices
 
 The `licenses` directory contains 45 upstream notice files, including selected source-file attributions and embedded font licenses. [NOTICE-INDEX.json](licenses/NOTICE-INDEX.json) records their sources, hashes, and distribution requirements. `scripts/Collect-Skate2Notices.ps1` verifies the collection against local SDK sources and recorded provenance.

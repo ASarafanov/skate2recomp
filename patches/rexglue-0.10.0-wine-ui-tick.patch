@@ -1,0 +1,78 @@
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 7360ed9..1e0ca30 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -12,6 +12,8 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cctype>
++#include <chrono>
++#include <thread>
+ #include <utility>
+ 
+ #include <rex/assert.h>
+@@ -1631,7 +1633,44 @@ Microsoft::WRL::ComPtr<IDXGIOutput> Presenter::GetDXGIOutputForMonitor(IDXGIFact
+   return nullptr;
+ }
+ 
++namespace {
++
++bool RunningUnderWine() {
++  static const bool wine = [] {
++    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++    return ntdll && GetProcAddress(ntdll, "wine_get_version");
++  }();
++  return wine;
++}
++
++std::chrono::nanoseconds OutputRefreshPeriod(IDXGIOutput* output) {
++  uint32_t hz = 60;
++  DXGI_OUTPUT_DESC desc;
++  if (output && SUCCEEDED(output->GetDesc(&desc))) {
++    MONITORINFOEXW info = {};
++    info.cbSize = sizeof(info);
++    DEVMODEW mode = {};
++    mode.dmSize = sizeof(mode);
++    if (GetMonitorInfoW(desc.Monitor, &info) &&
++        EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) &&
++        mode.dmDisplayFrequency > 1) {
++      hz = mode.dmDisplayFrequency;
++    }
++  }
++  return std::chrono::nanoseconds(UINT64_C(1000000000) / hz);
++}
++
++}  // namespace
++
+ void Presenter::DXGIUITickThread() {
++  // Wine (Proton) implements IDXGIOutput::WaitForVBlank by polling the clock,
++  // which keeps a whole CPU core busy - on a power-limited device such as the
++  // Steam Deck that power is taken from the GPU. Under Wine, sleep until the
++  // next refresh interval of the output instead.
++  const bool timer_ticks = RunningUnderWine();
++  IDXGIOutput* timer_tick_output = nullptr;
++  std::chrono::nanoseconds timer_tick_period(0);
++  std::chrono::steady_clock::time_point timer_next_tick;
+   std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+   while (true) {
+     if (dxgi_ui_tick_thread_shutdown_) {
+@@ -1648,7 +1687,18 @@ void Presenter::DXGIUITickThread() {
+     {
+       Microsoft::WRL::ComPtr<IDXGIOutput> dxgi_output = dxgi_ui_tick_output_;
+       dxgi_ui_tick_lock.unlock();
+-      wait_succeeded = SUCCEEDED(dxgi_ui_tick_output_->WaitForVBlank());
++      if (timer_ticks) {
++        if (dxgi_output.Get() != timer_tick_output) {
++          timer_tick_output = dxgi_output.Get();
++          timer_tick_period = OutputRefreshPeriod(timer_tick_output);
++        }
++        timer_next_tick =
++            std::max(timer_next_tick + timer_tick_period, std::chrono::steady_clock::now());
++        std::this_thread::sleep_until(timer_next_tick);
++        wait_succeeded = true;
++      } else {
++        wait_succeeded = SUCCEEDED(dxgi_ui_tick_output_->WaitForVBlank());
++      }
+     }
+     dxgi_ui_tick_lock.lock();
+     if (wait_succeeded) {

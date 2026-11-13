@@ -16,6 +16,10 @@ set(SKATE2_SOURCES
     src/crash_diagnostics.cpp
     src/automatic_gpu_selection.cpp
     src/frame_rate.cpp
+    src/graphics_api.cpp
+    src/fast_fma.cpp
+    src/render_wait.cpp
+    src/native_render.cpp
 )
 
 if(WIN32)

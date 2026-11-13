@@ -77,7 +77,7 @@ try {
             if ($LASTEXITCODE -ne 0 -or $sdkCommit -ne 'f5337cdc947ff6d4c4196737e2c807a48f2a1fc2') {
                 throw 'SDK source revision differs from the pinned, audited version.'
             }
-            foreach ($patchName in @('rexglue-0.10.0-windows-build.patch', 'rexglue-0.10.0-float16-pack.patch', 'rexglue-0.10.0-input-diagnostics.patch', 'rexglue-0.10.0-input-synchronization.patch', 'rexglue-0.10.0-audio-output.patch', 'rexglue-0.10.0-cvar-toml-escaping.patch', 'rexglue-0.10.0-release-perf-counters.patch', 'rexglue-0.10.0-live-frame-capture.patch', 'rexglue-0.10.0-cvar-validator.patch', 'rexglue-0.10.0-vertex-buffer-coherency.patch', 'rexglue-0.10.0-present-idleclean-diagnostic.patch')) {
+            foreach ($patchName in @('rexglue-0.10.0-windows-build.patch', 'rexglue-0.10.0-float16-pack.patch', 'rexglue-0.10.0-input-diagnostics.patch', 'rexglue-0.10.0-input-synchronization.patch', 'rexglue-0.10.0-audio-output.patch', 'rexglue-0.10.0-cvar-toml-escaping.patch', 'rexglue-0.10.0-release-perf-counters.patch', 'rexglue-0.10.0-live-frame-capture.patch', 'rexglue-0.10.0-cvar-validator.patch', 'rexglue-0.10.0-vertex-buffer-coherency.patch', 'rexglue-0.10.0-present-idleclean-diagnostic.patch', 'rexglue-0.10.0-vulkan-vertex-buffer-coherency.patch', 'rexglue-0.10.0-vulkan-present-idleclean.patch', 'rexglue-0.10.0-wine-ui-tick.patch', 'rexglue-0.10.0-native-guest-renderer.patch')) {
                 $sdkPatch = Join-Path $workspace "patches\$patchName"
                 $previousPreference = $ErrorActionPreference
                 try {
@@ -92,7 +92,7 @@ try {
             }
             $releaseCounters = if ($PerformanceCounters) { 'ON' } else { 'OFF' }
             Invoke-Checked cmake @('--preset', 'win-amd64',
-                '-DREXGLUE_ENABLE_FIDELITYFX=OFF', '-DREXGLUE_USE_VULKAN=OFF',
+                '-DREXGLUE_ENABLE_FIDELITYFX=OFF', '-DREXGLUE_USE_VULKAN=ON',
                 '-DREXGLUE_ENABLE_PERF_COUNTERS=ON', "-DREXGLUE_ENABLE_RELEASE_PERF_COUNTERS=$releaseCounters",
                 '-DREXGLUE_ENABLE_TRACY=OFF', '-DREXGLUE_BUILD_TESTS=OFF')
             Invoke-Checked cmake @('--build', 'out/build/win-amd64', '--config', 'Release',
