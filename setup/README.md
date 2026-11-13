@@ -40,8 +40,15 @@ The output is `dist/Skate2-PC-Setup-v<version>.exe`, a `.zip` of it and
 
 ## What the setup does
 
-1. **Checks the disc.** Reads the XDVDFS file table of the ISO (plain XISO, XGD1,
-   XGD2 or XGD3) and checks `default.xex`: title ID `4541087F`, then the SHA-256
+1. **Checks the source.** It accepts the ISO or an already extracted game folder:
+   - **ISO:** the setup reads its XDVDFS file table (plain XISO, XGD1, XGD2 or
+     XGD3).
+   - **Extracted folder:** the folder must hold `default.xex` and `data`. The
+     player can also point at that `default.xex` itself. Links in the folder are
+     refused.
+   - **Archive:** a `.rar`, `.zip` or `.7z` gets a message to extract it first.
+
+   In every case `default.xex` must match: title ID `4541087F`, then the SHA-256
    `116ba3ee…`. Other releases are rejected before anything is copied.
 2. **Picks the folder.** If the chosen folder already holds other files, the setup
    installs into a `Skate 2` folder inside it. The path must be ASCII: the
@@ -65,7 +72,8 @@ Unattended install, which writes `setup.log` in the target folder:
 Skate2-PC-Setup-v0.2.0.exe --quiet --iso=D:\Skate2.iso --dir=C:\Games\Skate 2
 ```
 
-Exit codes: 0 done, 1 install failed, 2 bad folder, 3 disc rejected.
+`--iso` also takes an extracted game folder. Exit codes: 0 done, 1 install failed,
+2 bad folder, 3 disc rejected.
 
 ## Launcher
 

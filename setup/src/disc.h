@@ -33,17 +33,21 @@ struct DiscFile {
   std::string path;     // as on the disc, '/' separated: "data/audio/x.big"
   uint64_t offset = 0;  // absolute byte offset in the image
   uint64_t size = 0;
+  std::wstring source;  // extracted folder: the file to copy; image: empty
 };
 
 struct Disc {
-  std::wstring image;
+  std::wstring image;   // the disc image, or the extracted game folder
+  bool folder = false;  // true: files come from an extracted folder
   std::vector<DiscFile> files;  // disc order, default.xex last
   uint64_t total_bytes = 0;
 };
 
-// Reads the file table of `image` and checks default.xex (title ID and
-// SHA-256). Returns an empty string and fills `disc`, or a message.
-std::wstring CheckDisc(const std::wstring& image, Disc& disc);
+// Checks a game source and fills `disc`: a disc image (XDVDFS file table),
+// an extracted game folder holding default.xex and data\, or that
+// default.xex itself. default.xex must match (title ID and SHA-256).
+// Returns an empty string, or a message for the player.
+std::wstring CheckDisc(const std::wstring& source, Disc& disc);
 
 // The same check for an already extracted default.xex.
 std::wstring CheckXexFile(const std::wstring& path);

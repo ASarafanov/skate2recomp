@@ -36,8 +36,8 @@ EXSTYLE WS_EX_ACCEPTFILES
 CAPTION "Skate 2 PC Setup"
 FONT 9, "MS Shell Dlg 2"
 BEGIN
-  LTEXT "Installs Skate 2 PC from your own Xbox 360 disc image. Game files are not included: they are copied from the ISO you select.", IDC_INTRO, 10, 8, 320, 18
-  LTEXT "Skate 2 disc image (.iso)", -1, 10, 32, 200, 9
+  LTEXT "Installs Skate 2 PC from your own Xbox 360 disc image. Game files are not included: they are copied from the ISO or extracted game folder you select.", IDC_INTRO, 10, 8, 320, 18
+  LTEXT "Skate 2 disc image (.iso) or extracted game folder", -1, 10, 32, 260, 9
   EDITTEXT IDC_ISO, 10, 42, 260, 14, ES_AUTOHSCROLL
   PUSHBUTTON "Browse...", IDC_ISO_BROWSE, 276, 41, 54, 15
   LTEXT "", IDC_ISO_STATUS, 10, 59, 320, 18

@@ -7,7 +7,7 @@ A community Windows port of the Xbox 360 version of **Skate 2**, built with [ReX
 This fork of [christianortel/skate2-recompile-pc](https://github.com/christianortel/skate2-recompile-pc) adds **Skate2-PC-Setup.exe**. The game code is unchanged: `skate2.exe` and its DLLs are upstream's v0.1.1 build.
 
 1. Download **Skate2-PC-Setup-v0.2.0.exe** (or the `.zip` of it) from [Releases](../../releases/latest) and run it.
-2. Select your Skate 2 **ISO** and the **install folder**, then click **Install**. The setup checks the disc and copies the game files from it. You don't need to extract anything, and you don't need PowerShell or the Visual C++ installer.
+2. Select your Skate 2 **ISO** (or an already extracted game folder with `default.xex` and `data`) and the **install folder**, then click **Install**. The setup checks the game and copies its files. You don't need to extract an ISO, and you don't need PowerShell or the Visual C++ installer. Archives such as `.rar` must be extracted first.
 3. Click **Play**, or start **Launch Skate 2.exe** in the install folder later. Hold **Shift** while it starts to change quality and FPS.
 
 **Steam Deck / Linux:** in Desktop Mode, add the setup to Steam as a non-Steam game, force Proton, run it and install to the suggested `~/Games/Skate 2`. Then add the installed **Launch Skate 2.exe** the same way and play from Game Mode. Under Proton the defaults are 1× quality and 60 FPS. Proton and Steam Deck support has not been tested on a device yet.

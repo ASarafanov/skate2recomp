@@ -130,6 +130,12 @@ InstallResult Installer::Run() {
   if (!job_.disc && !HasGameFiles(job_.target)) {
     return Fail(L"Select your Skate 2 disc image: this folder has no complete game files yet.");
   }
+  if (job_.disc && job_.disc->folder &&
+      _wcsicmp(FullPath(job_.disc->image).c_str(),
+               FullPath(Join(job_.target, kGameDirName)).c_str()) == 0) {
+    return Fail(L"These game files are already in the install folder. Choose another source "
+                L"or another install folder.");
+  }
   if (!MakeDirs(job_.target)) {
     return Fail(L"Could not create the folder " + job_.target + L": " + WindowsError());
   }
@@ -165,7 +171,7 @@ InstallResult Installer::Run() {
     const std::wstring xex = Join(game_dir, L"default.xex");
     DeleteFileW(xex.c_str());
     File image;
-    if (!image.OpenRead(job_.disc->image)) {
+    if (!job_.disc->folder && !image.OpenRead(job_.disc->image)) {
       return Fail(L"Could not open the disc image: " + WindowsError());
     }
     for (const DiscFile& file : job_.disc->files) {
@@ -180,7 +186,19 @@ InstallResult Installer::Run() {
         }
       }
       SetCurrent(L"game/" + Widen(file.path));
-      const InstallResult result = Copy(image, file.offset, file.size, destination, {});
+      InstallResult result;
+      if (job_.disc->folder) {
+        File source;
+        if (!source.OpenRead(file.source)) {
+          return Fail(L"Could not open " + file.source + L": " + WindowsError());
+        }
+        if (source.Size() != file.size) {
+          return Fail(L"The file changed while installing: " + file.source);
+        }
+        result = Copy(source, 0, file.size, destination, {});
+      } else {
+        result = Copy(image, file.offset, file.size, destination, {});
+      }
       if (result != InstallResult::kDone) return result;
     }
     if (std::wstring check = CheckXexFile(xex); !check.empty()) {

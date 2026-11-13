@@ -249,8 +249,102 @@ std::wstring SizeText(uint64_t bytes) {
   return text;
 }
 
-std::wstring CheckDisc(const std::wstring& image, Disc& disc) {
+namespace {
+
+bool EndsWith(const std::wstring& text, const wchar_t* suffix) {
+  const size_t n = wcslen(suffix);
+  return text.size() >= n && _wcsicmp(text.c_str() + text.size() - n, suffix) == 0;
+}
+
+// Lists the files below `dir` (relative, '/' separated). False when the
+// folder holds links, odd names or too many files.
+bool ListFolder(const std::wstring& root, const std::string& prefix, std::vector<DiscFile>& files,
+                std::wstring& error) {
+  WIN32_FIND_DATAW data;
+  const std::wstring dir = prefix.empty() ? root : Join(root, Widen(prefix));
+  HANDLE find = FindFirstFileW(Join(dir, L"*").c_str(), &data);
+  if (find == INVALID_HANDLE_VALUE) return true;
+  bool ok = true;
+  do {
+    const std::wstring wname = data.cFileName;
+    if (wname == L"." || wname == L"..") continue;
+    const std::string name = Narrow(wname);
+    if (!SafeName(name) || Widen(name) != wname) {
+      error = L"The game folder contains an unexpected file name: " + Join(dir, wname);
+      ok = false;
+      break;
+    }
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+      error = L"The game folder contains links. Select ordinary extracted files.";
+      ok = false;
+      break;
+    }
+    const std::string path = prefix + name;
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (Lower(path + "/").rfind(kSkippedDir, 0) == 0) continue;
+      if (!ListFolder(root, path + "/", files, error)) {
+        ok = false;
+        break;
+      }
+    } else {
+      if (files.size() >= kMaxEntries) {
+        error = L"The game folder holds too many files.";
+        ok = false;
+        break;
+      }
+      DiscFile file;
+      file.path = path;
+      file.size = (uint64_t(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+      file.source = Join(root, Widen(path));
+      files.push_back(std::move(file));
+    }
+  } while (FindNextFileW(find, &data));
+  FindClose(find);
+  return ok;
+}
+
+std::wstring CheckFolder(const std::wstring& folder, Disc& disc) {
+  const std::wstring xex = Join(folder, L"default.xex");
+  if (!IsFile(xex) || !IsDir(Join(folder, L"data"))) {
+    return L"This folder has no default.xex and data folder. Select the extracted game folder "
+           L"that contains both, or the disc image.";
+  }
+  if (std::wstring error = CheckXexFile(xex); !error.empty()) return error;
+  std::vector<DiscFile> all;
+  std::wstring error;
+  if (!ListFolder(folder, "", all, error)) return error;
+  disc.image = folder;
+  disc.folder = true;
+  DiscFile xex_file;
+  for (DiscFile& file : all) {
+    if (Lower(file.path) == "default.xex") {
+      xex_file = std::move(file);
+      continue;
+    }
+    disc.total_bytes += file.size;
+    disc.files.push_back(std::move(file));
+  }
+  disc.total_bytes += xex_file.size;
+  disc.files.push_back(std::move(xex_file));
+  return {};
+}
+
+}  // namespace
+
+std::wstring CheckDisc(const std::wstring& source, Disc& disc) {
   disc = {};
+  if (IsDir(source)) return CheckFolder(FullPath(source), disc);
+  if (EndsWith(source, L"\\default.xex") || EndsWith(source, L"/default.xex") ||
+      _wcsicmp(source.c_str(), L"default.xex") == 0) {
+    return CheckFolder(DirName(FullPath(source)), disc);
+  }
+  for (const wchar_t* archive : {L".rar", L".zip", L".7z", L".gz", L".xz"}) {
+    if (EndsWith(source, archive)) {
+      return L"This is an archive, not a disc image. Extract it first (for example with "
+             L"7-Zip), then select the .iso, or the extracted folder with default.xex.";
+    }
+  }
+  const std::wstring& image = source;
   File in;
   if (!in.OpenRead(image)) return L"The file could not be opened.";
   const uint64_t image_size = in.Size();

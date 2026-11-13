@@ -109,11 +109,12 @@ std::wstring PickPath(HWND owner, bool folder, const std::wstring& start) {
     dialog->SetOptions(flags | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
     dialog->SetTitle(L"Choose where to install Skate 2");
   } else {
-    const COMDLG_FILTERSPEC filters[] = {{L"Xbox 360 disc image (*.iso)", L"*.iso"},
-                                         {L"All files", L"*.*"}};
+    const COMDLG_FILTERSPEC filters[] = {
+        {L"Disc image or extracted default.xex (*.iso; default.xex)", L"*.iso;default.xex"},
+        {L"All files", L"*.*"}};
     dialog->SetFileTypes(2, filters);
     dialog->SetOptions(flags | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-    dialog->SetTitle(L"Select your Skate 2 disc image");
+    dialog->SetTitle(L"Select your Skate 2 disc image, or default.xex of the extracted game");
   }
   std::wstring start_dir = start;
   while (!start_dir.empty() && !IsDir(start_dir)) {
@@ -246,7 +247,7 @@ void CheckIso(HWND dialog, SetupState& state) {
   state.disc.reset();
   state.iso_error.clear();
   if (iso.empty()) return;
-  if (!IsFile(iso)) {
+  if (!IsFile(iso) && !IsDir(iso)) {
     state.iso_error = L"File not found.";
     return;
   }
@@ -265,15 +266,18 @@ void UpdateUi(HWND dialog, SetupState& state) {
   // Disc line.
   std::wstring iso_text;
   if (state.disc) {
-    iso_text = L"Skate 2, supported release (media ID 6ADB5821). " +
-               SizeText(state.disc->total_bytes) + L" of game files.";
+    iso_text = std::wstring(state.disc->folder ? L"Extracted Skate 2 game folder"
+                                               : L"Skate 2 disc image") +
+               L", supported release (media ID 6ADB5821). " + SizeText(state.disc->total_bytes) +
+               L" of game files.";
   } else if (!state.iso_error.empty()) {
     iso_text = state.iso_error;
   } else if (has_game) {
     iso_text = L"Not needed: the game files are already installed. Select it only to copy them "
                L"again.";
   } else {
-    iso_text = L"Select the .iso image of your Xbox 360 Skate 2 disc.";
+    iso_text = L"Select the .iso image of your Xbox 360 Skate 2 disc, or the extracted game "
+               L"folder (with default.xex and data). Drop either onto this window.";
   }
   SetDlgItemTextW(dialog, IDC_ISO_STATUS, iso_text.c_str());
 
@@ -497,7 +501,10 @@ INT_PTR CALLBACK SetupProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpar
       HDROP drop = HDROP(wparam);
       wchar_t path[MAX_PATH * 4];
       if (!state->working && DragQueryFileW(drop, 0, path, MAX_PATH * 4)) {
-        if (IsDir(path)) {
+        // A folder with the game files is a source; any other folder is
+        // where to install.
+        const bool game_folder = IsFile(Join(path, L"default.xex"));
+        if (IsDir(path) && !game_folder) {
           if (state->fixed_dir.empty()) SetDlgItemTextW(dialog, IDC_DIR, path);
         } else {
           SetDlgItemTextW(dialog, IDC_ISO, path);
