@@ -2,6 +2,7 @@
 #pragma once
 
 #define IDI_APP 1
+#define IDB_HEADER 2
 
 #define IDD_SETUP 100
 #define IDC_INTRO 101
@@ -24,5 +25,5 @@
 #define IDC_FPS 202
 #define IDC_PATH 203
 #define IDC_WINDOWED 204
-#define IDC_ALWAYS 205
+#define IDC_HEADER 205
 #define IDC_OPTIONS_NOTE 206

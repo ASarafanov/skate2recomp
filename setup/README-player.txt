@@ -6,10 +6,12 @@ The game files in the "game" folder were copied from your own disc image.
 
 Playing
 -------
-Start "Launch Skate 2.exe". It starts the game right away.
+Start "Launch Skate 2.exe". The launcher window opens: choose the rendering
+quality, frame rate and render path if you like, then press Play.
 
-- Hold Shift while starting it (or run it with --options) to change the
-  rendering quality, the frame rate and the render path.
+- With a controller: d-pad to move and change, A to select, Start to play,
+  B to quit. Works in Steam Deck Game Mode.
+- To start the game without the window, run it with --play.
 - Press F4 in the game for the PC settings (audio output, controls...).
   Choose "Save to config" and restart after changing them.
 - Use a controller. A USB DualSense works directly; close DS4Windows.
@@ -37,7 +39,7 @@ the Skate 2 shortcuts if you created them.
 Problems
 --------
 - The game's log is in the "logs" folder, the launcher's in launcher.log.
-- If the picture is broken, try the RTV render path (Shift at start).
+- If the picture is broken, try the RTV render path in the launcher window.
 - If it is slow, use 1x quality and check the power mode of a laptop.
 
 Credits and licenses

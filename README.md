@@ -29,7 +29,7 @@
 | | | |
 | :-- | :-- | :-- |
 | 💿 **One-file setup**<br>Choose your `.iso` (or extracted game folder) and an install folder; the setup does the rest. | 🖥️ **Up to 4x resolution**<br>Render at 1x to 4x the console's internal picture. | 🎞️ **60 FPS and beyond**<br>Original, 60 to 240 FPS or unlimited. |
-| 🛹 **The whole city**<br>Free Skate, the career and the replay editor run natively. | 🎮 **Controllers**<br>Xbox-style controls; a USB DualSense works without DS4Windows. | ⚙️ **PC settings**<br><kbd>F4</kbd> in the game, <kbd>Shift</kbd> at start for quality and FPS. |
+| 🛹 **The whole city**<br>Free Skate, the career and the replay editor run natively. | 🎮 **Controllers**<br>Xbox-style controls; a USB DualSense works without DS4Windows. | 🚀 **Launcher window**<br>Quality, FPS and a big **Play** button; works with a controller. |
 | 🔄 **Updates keep your saves**<br>A newer setup replaces only the program files. | 🐧 **Proton**<br>No PowerShell or .NET needed; built to run on Steam Deck. | 🧩 **Same game code as upstream**<br>Built on [skate2-recompile-pc](https://github.com/christianortel/skate2-recompile-pc). |
 
 > [!NOTE]
@@ -63,7 +63,7 @@
 1. Download **Skate2-PC-Setup-v0.2.0.exe** (or the `.zip` of it) from [Releases](https://github.com/ASarafanov/skate2recomp/releases/latest) and run it. The program is not code-signed, so Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**.
 2. Choose your Skate 2 `.iso` with **Browse...**, or drop it onto the window. An already extracted game folder (with `default.xex` and `data`) works too. Archives such as `.rar` must be extracted first.
 3. Pick the install folder (default `C:\Games\Skate 2`) and press **Install**. The setup checks the disc before copying anything. If the install is interrupted, run it again on the same folder to continue.
-4. Press **Play**. Later, start **Launch Skate 2.exe** in the install folder or from the Desktop / Start menu shortcut. It goes straight into the game.
+4. Press **Play**. Later, start **Launch Skate 2.exe** in the install folder or from the Desktop / Start menu shortcut. It opens the launcher window: pick quality and FPS if you like, then **Play**.
 
 ### Steam Deck and Linux (Proton)
 
@@ -77,9 +77,9 @@ Under Proton the defaults are 1x quality and 60 FPS.
 
 | Where | What |
 | :-- | :-- |
-| <kbd>Shift</kbd> while **Launch Skate 2.exe** starts | Rendering quality (1x–4x), frame rate, render path (ROV / RTV), windowed. Saved in `launcher.ini`. |
+| The launcher window (**Launch Skate 2.exe**) | Rendering quality (1x–4x), frame rate, render path (ROV / RTV), windowed, then **Play**. Saved in `launcher.ini`. With a controller: d-pad to move and change, <kbd>A</kbd> to select, <kbd>Start</kbd> to play, <kbd>B</kbd> to quit. |
 | <kbd>F4</kbd> in the game | PC settings: audio output, controls and more. Choose **Save to config** and restart. |
-| Launch options | `--render-scale N`, `--frame-rate X`, `--windowed`, or any `--flag=value` of the game. |
+| Launch options | `--play` skips the launcher window. Also `--render-scale N`, `--frame-rate X`, `--windowed`, or any `--flag=value` of the game. |
 
 Saves are in `userdata` inside the install folder. To update, run a newer setup on the same folder: it keeps `userdata`, `skate2.toml` and `launcher.ini`, and does not need the disc.
 

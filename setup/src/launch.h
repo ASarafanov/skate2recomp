@@ -15,7 +15,6 @@ struct LaunchSettings {
   std::wstring frame_rate = L"unlimited";  // original, 60, 120, ... unlimited
   std::wstring render_path = L"rov";   // rov or rtv
   bool windowed = false;
-  bool show_options = false;           // open the options on every start
 };
 
 extern const wchar_t* const kFrameRates[];

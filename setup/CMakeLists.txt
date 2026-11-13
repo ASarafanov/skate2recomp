@@ -11,6 +11,7 @@ endif()
 add_executable(skate2_setup WIN32
   src/main.cpp
   src/disc.cpp
+  src/gamepad.cpp
   src/install.cpp
   src/launch.cpp
   src/util.cpp

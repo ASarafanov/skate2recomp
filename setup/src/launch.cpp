@@ -69,7 +69,6 @@ LaunchSettings LoadSettings(const std::wstring& dir) {
                            ini.c_str());
   if (!wcscmp(value, L"rov") || !wcscmp(value, L"rtv")) settings.render_path = value;
   settings.windowed = GetPrivateProfileIntW(kSection, L"windowed", 0, ini.c_str()) != 0;
-  settings.show_options = GetPrivateProfileIntW(kSection, L"show_options", 0, ini.c_str()) != 0;
   return settings;
 }
 
@@ -82,9 +81,7 @@ bool SaveSettings(const std::wstring& dir, const LaunchSettings& settings) {
          WritePrivateProfileStringW(kSection, L"render_path", settings.render_path.c_str(),
                                     ini.c_str()) &&
          WritePrivateProfileStringW(kSection, L"windowed", settings.windowed ? L"1" : L"0",
-                                    ini.c_str()) &&
-         WritePrivateProfileStringW(kSection, L"show_options",
-                                    settings.show_options ? L"1" : L"0", ini.c_str());
+                                    ini.c_str());
 }
 
 std::vector<std::wstring> GameArguments(const std::wstring& dir, const LaunchSettings& settings,

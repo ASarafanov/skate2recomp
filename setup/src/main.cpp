@@ -4,6 +4,7 @@
 //  - without it, inside an install (Launch Skate 2.exe): starts the game
 //    right away; Shift or --options opens the options first.
 #include "disc.h"
+#include "gamepad.h"
 #include "install.h"
 #include "launch.h"
 #include "resource.h"
@@ -31,8 +32,7 @@ constexpr int kExitPlay = 100;
 
 struct Options {
   bool setup = false;    // show the setup even when installed
-  bool options = false;  // show the launch options before starting
-  bool play = false;     // setup exe: start the installed game
+  bool play = false;     // start the game without the launcher window
   bool quiet = false;    // install without a window (needs --iso and --dir)
   std::wstring iso, dir;
   std::optional<int> render_scale;
@@ -57,7 +57,7 @@ Options ParseOptions() {
       return i + 1 < count ? std::wstring(argv[++i]) : std::wstring();
     };
     if (name == L"--setup") options.setup = true;
-    else if (name == L"--options") options.options = true;
+    else if (name == L"--options") {}  // the window opens anyway (older shortcuts)
     else if (name == L"--play") options.play = true;
     else if (name == L"--quiet") options.quiet = true;
     else if (name == L"--iso") options.iso = next();
@@ -140,12 +140,40 @@ std::wstring PickPath(HWND owner, bool folder, const std::wstring& start) {
   return result;
 }
 
-// --- options dialog --------------------------------------------------------
+// --- launcher window (options + Play) --------------------------------------
 
 struct OptionsState {
   LaunchSettings settings;
-  bool play_button = true;
+  bool play_button = true;  // launcher: Play / Quit; from the setup: Save / Cancel
+  HBITMAP header = nullptr;
+  PadNavigator pad;
 };
+
+// Draws the header picture into the owner-drawn static, cropped to fill it.
+void DrawHeader(const DRAWITEMSTRUCT& item, HBITMAP bitmap) {
+  const RECT& r = item.rcItem;
+  FillRect(item.hDC, &r, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+  BITMAP info{};
+  if (!bitmap || !GetObjectW(bitmap, sizeof(info), &info)) return;
+  const int dw = r.right - r.left, dh = r.bottom - r.top;
+  int sw = info.bmWidth, sh = info.bmHeight, sx = 0, sy = 0;
+  if (int64_t(sw) * dh > int64_t(sh) * dw) {  // source wider: crop the sides
+    const int w = int(int64_t(sh) * dw / dh);
+    sx = (sw - w) / 2;
+    sw = w;
+  } else {  // source taller: crop top and bottom
+    const int h = int(int64_t(sw) * dh / dw);
+    sy = (sh - h) / 2;
+    sh = h;
+  }
+  HDC source = CreateCompatibleDC(item.hDC);
+  HGDIOBJ old = SelectObject(source, bitmap);
+  SetStretchBltMode(item.hDC, HALFTONE);
+  SetBrushOrgEx(item.hDC, 0, 0, nullptr);
+  StretchBlt(item.hDC, r.left, r.top, dw, dh, source, sx, sy, sw, sh, SRCCOPY);
+  SelectObject(source, old);
+  DeleteDC(source);
+}
 
 INT_PTR CALLBACK OptionsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
   auto* state = reinterpret_cast<OptionsState*>(GetWindowLongPtrW(dialog, DWLP_USER));
@@ -153,9 +181,11 @@ INT_PTR CALLBACK OptionsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lp
     case WM_INITDIALOG: {
       state = reinterpret_cast<OptionsState*>(lparam);
       SetWindowLongPtrW(dialog, DWLP_USER, LONG_PTR(state));
+      state->header = static_cast<HBITMAP>(LoadImageW(GetModuleHandleW(nullptr),
+          MAKEINTRESOURCEW(IDB_HEADER), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
       const LaunchSettings& s = state->settings;
       HWND scale = GetDlgItem(dialog, IDC_SCALE);
-      for (const wchar_t* text : {L"1x - 1152x640, fastest", L"2x - sharper (default on PC)",
+      for (const wchar_t* text : {L"1x - 1152x640, fastest", L"2x - sharper",
                                   L"3x - experimental", L"4x - experimental"}) {
         SendMessageW(scale, CB_ADDSTRING, 0, LPARAM(text));
       }
@@ -174,13 +204,29 @@ INT_PTR CALLBACK OptionsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lp
       SendMessageW(path, CB_ADDSTRING, 0, LPARAM(L"RTV (if the picture is broken)"));
       SendMessageW(path, CB_SETCURSEL, s.render_path == L"rtv" ? 1 : 0, 0);
       CheckDlgButton(dialog, IDC_WINDOWED, s.windowed ? BST_CHECKED : BST_UNCHECKED);
-      CheckDlgButton(dialog, IDC_ALWAYS, s.show_options ? BST_CHECKED : BST_UNCHECKED);
       SetDlgItemTextW(dialog, IDC_OPTIONS_NOTE,
-                      L"Hold Shift while starting Launch Skate 2.exe to open this window. More "
-                      L"PC settings are in the game: press F4.");
+                      L"Controller: D-pad moves and changes, A selects, Start plays.");
       SetDlgItemTextW(dialog, IDOK, state->play_button ? L"Play" : L"Save");
-      return TRUE;
+      SetDlgItemTextW(dialog, IDCANCEL, state->play_button ? L"Quit" : L"Cancel");
+      std::wstring title = L"Skate 2 PC ";
+      title += SKATE2_SETUP_VERSION_WSTR;
+      SetWindowTextW(dialog, title.c_str());
+      state->pad.Attach(dialog, false);
+      SetFocus(GetDlgItem(dialog, IDOK));
+      SetForegroundWindow(dialog);
+      return FALSE;  // focus set above
     }
+    case WM_DRAWITEM: {
+      const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+      if (item->CtlID == IDC_HEADER) {
+        DrawHeader(*item, state->header);
+        return TRUE;
+      }
+      break;
+    }
+    case WM_TIMER:
+      if (wparam == PadNavigator::kPadTimer) state->pad.OnTimer();
+      return TRUE;
     case WM_COMMAND:
       if (LOWORD(wparam) == IDOK) {
         LaunchSettings& s = state->settings;
@@ -190,7 +236,6 @@ INT_PTR CALLBACK OptionsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lp
         s.render_path =
             SendDlgItemMessageW(dialog, IDC_PATH, CB_GETCURSEL, 0, 0) == 1 ? L"rtv" : L"rov";
         s.windowed = IsDlgButtonChecked(dialog, IDC_WINDOWED) == BST_CHECKED;
-        s.show_options = IsDlgButtonChecked(dialog, IDC_ALWAYS) == BST_CHECKED;
         EndDialog(dialog, IDOK);
         return TRUE;
       }
@@ -199,13 +244,19 @@ INT_PTR CALLBACK OptionsProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lp
         return TRUE;
       }
       break;
+    case WM_DESTROY:
+      if (state && state->header) DeleteObject(state->header);
+      break;
   }
   return FALSE;
 }
 
-// Shows the options for the install in `dir` and saves them. True on OK.
+// Shows the launcher window (or, from the setup, the options) for the install
+// in `dir` and saves the choices. True on Play / Save.
 bool EditOptions(HWND owner, const std::wstring& dir, bool play_button) {
-  OptionsState state{LoadSettings(dir), play_button};
+  OptionsState state;
+  state.settings = LoadSettings(dir);
+  state.play_button = play_button;
   if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_OPTIONS), owner,
                       OptionsProc, LPARAM(&state)) != IDOK) {
     return false;
@@ -232,6 +283,7 @@ struct SetupState {
   InstallResult result = InstallResult::kDone;
   std::wstring error;
   std::wstring play_dir;  // set when the dialog ends with kExitPlay
+  PadNavigator pad;
 };
 
 std::wstring TargetOf(HWND dialog, const SetupState& state) {
@@ -445,6 +497,7 @@ INT_PTR CALLBACK SetupProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpar
       }
       CheckIso(dialog, *state);
       UpdateUi(dialog, *state);
+      state->pad.Attach(dialog, true);
       return TRUE;
     }
     case WM_COMMAND: {
@@ -487,6 +540,7 @@ INT_PTR CALLBACK SetupProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpar
       return TRUE;
     }
     case WM_TIMER:
+      if (wparam == PadNavigator::kPadTimer) state->pad.OnTimer();
       if (wparam == kTimerProgress && state->working) ShowProgress(dialog, *state);
       if (wparam == kTimerCheckIso) {
         KillTimer(dialog, kTimerCheckIso);
@@ -530,8 +584,9 @@ int Launch(const std::wstring& dir, const Options& options) {
   DeleteFileW(log.c_str());
   OpenLog(log);
   Log(L"Skate 2 PC launcher %ls%ls", SKATE2_SETUP_VERSION_WSTR, IsWine() ? L" (Wine)" : L"");
-  const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-  if (options.options || shift || LoadSettings(dir).show_options) {
+  // The launcher window (options and Play) opens on every start; --play
+  // (for game-library entries that want no window) starts the game directly.
+  if (!options.play) {
     if (!EditOptions(nullptr, dir, true)) return 0;
   }
   LaunchSettings settings = LoadSettings(dir);
@@ -579,7 +634,7 @@ int RunSetup(const Options& options, const Payload* payload, const std::wstring&
   if (state.worker.joinable()) state.worker.join();
   if (result == kExitPlay && IsInstalled(state.play_dir)) {
     Options play = options;
-    play.options = false;
+    play.play = true;  // Play was pressed in the setup already
     return Launch(state.play_dir, play);
   }
   return 0;

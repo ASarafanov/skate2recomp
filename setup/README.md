@@ -96,7 +96,9 @@ The options are in `launcher.ini`:
 | Render path | ROV | ROV |
 | Windowed | off | off |
 
-- **Options window:** hold Shift while starting the launcher, or pass `--options`.
+- **Launcher window:** opens on every start, with the options and a **Play** button.
+  A controller drives it (d-pad to move and change, A to select, Start to play,
+  B to quit), so it works in Steam Deck Game Mode. `--play` skips the window.
 - **Upstream arguments** still work: `--render-scale N`, `--frame-rate X`,
   `--windowed`.
 - **Game flags:** any other `--flag=value` argument is passed to `skate2.exe` as
