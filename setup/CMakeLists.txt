@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(Skate2Setup VERSION 0.2.0 LANGUAGES CXX RC)
+project(Skate2Setup VERSION 0.2.1 LANGUAGES CXX RC)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "The setup requires a 64-bit Windows toolchain.")

@@ -28,7 +28,7 @@ import urllib.request
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 UPSTREAM_URL = ("https://github.com/christianortel/skate2-recompile-pc/releases/download/"
                 "v0.1.1/Skate2-PC-v0.1.1-Windows-x64.zip")

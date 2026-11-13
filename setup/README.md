@@ -69,7 +69,7 @@ The output is `dist/Skate2-PC-Setup-v<version>.exe`, a `.zip` of it and
 Unattended install, which writes `setup.log` in the target folder:
 
 ```bat
-Skate2-PC-Setup-v0.2.0.exe --quiet --iso=D:\Skate2.iso --dir=C:\Games\Skate 2
+Skate2-PC-Setup-v0.2.1.exe --quiet --iso=D:\Skate2.iso --dir=C:\Games\Skate 2
 ```
 
 `--iso` also takes an extracted game folder. Exit codes: 0 done, 1 install failed,

@@ -60,14 +60,14 @@
 
 ### Windows
 
-1. Download **Skate2-PC-Setup-v0.2.0.exe** (or the `.zip` of it) from [Releases](https://github.com/ASarafanov/skate2recomp/releases/latest) and run it. The program is not code-signed, so Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**.
+1. Download **Skate2-PC-Setup-v0.2.1.exe** (or the `.zip` of it) from [Releases](https://github.com/ASarafanov/skate2recomp/releases/latest) and run it. The program is not code-signed, so Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**.
 2. Choose your Skate 2 `.iso` with **Browse...**, or drop it onto the window. An already extracted game folder (with `default.xex` and `data`) works too. Archives such as `.rar` must be extracted first.
 3. Pick the install folder (default `C:\Games\Skate 2`) and press **Install**. The setup checks the disc before copying anything. If the install is interrupted, run it again on the same folder to continue.
 4. Press **Play**. Later, start **Launch Skate 2.exe** in the install folder or from the Desktop / Start menu shortcut. It opens the launcher window: pick quality and FPS if you like, then **Play**.
 
 ### Steam Deck and Linux (Proton)
 
-1. In Desktop Mode, add `Skate2-PC-Setup-v0.2.0.exe` to Steam as a non-Steam game, force a Proton version in **Properties → Compatibility**, and start it.
+1. In Desktop Mode, add `Skate2-PC-Setup-v0.2.1.exe` to Steam as a non-Steam game, force a Proton version in **Properties → Compatibility**, and start it.
 2. Select your ISO and keep the suggested `~/Games/Skate 2`. When the install finishes, the setup shows the Linux path of `Launch Skate 2.exe`.
 3. Add that `Launch Skate 2.exe` to Steam the same way, force Proton, and play from Game Mode.
 
