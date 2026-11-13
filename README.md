@@ -6,8 +6,8 @@
 
 [<img src="https://img.shields.io/badge/Download-Windows%20x64-ec7026?style=for-the-badge&logo=windows&logoColor=white&labelColor=111418" alt="Download for Windows" height="44">](https://github.com/ASarafanov/skate2recomp/releases/latest)
 
-[![Latest release](https://img.shields.io/github/v/release/ASarafanov/skate2recomp?style=flat-square&label=release&color=ec7026&labelColor=111418)](https://github.com/ASarafanov/skate2recomp/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/ASarafanov/skate2recomp/total?style=flat-square&color=5b86ad&labelColor=111418)](https://github.com/ASarafanov/skate2recomp/releases)
+[![Latest release](https://img.shields.io/github/v/release/ASarafanov/skate2recomp?cacheSeconds=3600&style=flat-square&label=release&color=ec7026&labelColor=111418)](https://github.com/ASarafanov/skate2recomp/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ASarafanov/skate2recomp/total?cacheSeconds=3600&style=flat-square&color=5b86ad&labelColor=111418)](https://github.com/ASarafanov/skate2recomp/releases)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Proton-5b86ad?style=flat-square&labelColor=111418)
 ![Graphics](https://img.shields.io/badge/graphics-Direct3D%2012-5b86ad?style=flat-square&labelColor=111418)
 
