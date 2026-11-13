@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: MIT
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+#include "version.h"
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION SKATE2_SETUP_VERSION_RC
+PRODUCTVERSION SKATE2_SETUP_VERSION_RC
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Skate 2 PC community port"
+      VALUE "FileDescription", "Skate 2 PC setup and launcher"
+      VALUE "FileVersion", SKATE2_SETUP_VERSION_STR
+      VALUE "ProductName", "Skate 2 PC"
+      VALUE "ProductVersion", SKATE2_SETUP_VERSION_STR
+      VALUE "LegalCopyright", "MIT License. Skate 2 belongs to its rights holders."
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+
+IDD_SETUP DIALOGEX 0, 0, 340, 232
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+EXSTYLE WS_EX_ACCEPTFILES
+CAPTION "Skate 2 PC Setup"
+FONT 9, "MS Shell Dlg 2"
+BEGIN
+  LTEXT "Installs Skate 2 PC from your own Xbox 360 disc image. Game files are not included: they are copied from the ISO you select.", IDC_INTRO, 10, 8, 320, 18
+  LTEXT "Skate 2 disc image (.iso)", -1, 10, 32, 200, 9
+  EDITTEXT IDC_ISO, 10, 42, 260, 14, ES_AUTOHSCROLL
+  PUSHBUTTON "Browse...", IDC_ISO_BROWSE, 276, 41, 54, 15
+  LTEXT "", IDC_ISO_STATUS, 10, 59, 320, 18
+  LTEXT "Install folder", -1, 10, 80, 200, 9
+  EDITTEXT IDC_DIR, 10, 90, 260, 14, ES_AUTOHSCROLL
+  PUSHBUTTON "Browse...", IDC_DIR_BROWSE, 276, 89, 54, 15
+  LTEXT "", IDC_DIR_STATUS, 10, 107, 320, 26
+  AUTOCHECKBOX "Desktop shortcut", IDC_DESKTOP, 10, 136, 100, 10
+  AUTOCHECKBOX "Start menu shortcut", IDC_STARTMENU, 115, 136, 110, 10
+  CONTROL "", IDC_PROGRESS, PROGRESS_CLASSW, 0, 10, 152, 320, 10
+  LTEXT "", IDC_STATUS, 10, 166, 320, 36
+  PUSHBUTTON "Game options...", IDC_OPTIONS, 10, 208, 72, 16
+  DEFPUSHBUTTON "Install", IDC_INSTALL, 166, 208, 52, 16
+  PUSHBUTTON "Play", IDC_PLAY, 222, 208, 52, 16
+  PUSHBUTTON "Close", IDCANCEL, 278, 208, 52, 16
+END
+
+IDD_OPTIONS DIALOGEX 0, 0, 250, 150
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Skate 2 options"
+FONT 9, "MS Shell Dlg 2"
+BEGIN
+  LTEXT "Rendering quality", -1, 10, 11, 80, 9
+  COMBOBOX IDC_SCALE, 95, 9, 145, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+  LTEXT "Frame rate", -1, 10, 29, 80, 9
+  COMBOBOX IDC_FPS, 95, 27, 145, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+  LTEXT "Render path", -1, 10, 47, 80, 9
+  COMBOBOX IDC_PATH, 95, 45, 145, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+  AUTOCHECKBOX "Windowed", IDC_WINDOWED, 10, 66, 200, 10
+  AUTOCHECKBOX "Show this window every time the game starts", IDC_ALWAYS, 10, 80, 230, 10
+  LTEXT "", IDC_OPTIONS_NOTE, 10, 96, 230, 26
+  DEFPUSHBUTTON "Play", IDOK, 134, 128, 52, 16
+  PUSHBUTTON "Cancel", IDCANCEL, 190, 128, 52, 16
+END

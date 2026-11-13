@@ -33,3 +33,8 @@
 *.dmp
 *.obj
 __pycache__/
+# Setup builds (setup/README.md explains them)
+!/tools/package_setup.py
+/downloads/
+/dist/
+/setup/out/

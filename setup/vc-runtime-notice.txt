@@ -1,0 +1,13 @@
+Microsoft Visual C++ Runtime
+
+msvcp140.dll, msvcp140_atomic_wait.dll, vcruntime140.dll and vcruntime140_1.dll
+are redistributable files of the Microsoft Visual C++ 2015-2022 runtime
+(Visual Studio 2022, toolset 14.44), copied unchanged from the redist folder of
+Visual Studio Build Tools. They are installed next to skate2.exe so the game
+also starts where the runtime is not installed, such as a Proton prefix.
+
+They are Microsoft software, distributed under the Microsoft Software License
+Terms for Visual Studio, which allow redistributing these files with an
+application. They are not covered by the project's MIT license.
+
+The official installer: https://aka.ms/vc14/vc_redist.x64.exe
