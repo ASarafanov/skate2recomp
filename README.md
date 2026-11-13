@@ -1,72 +1,124 @@
-# Skate 2 PC
+<div align="center">
 
-A community Windows port of the Xbox 360 version of **Skate 2**, built with [ReXGlue](https://github.com/rexglue/rexglue-sdk).
+<img src="banner.jpg" alt="Skate 2 Recomp" width="340">
 
-## This fork: one-file setup, Steam Deck / Proton
+### Skate 2 for the Xbox 360, recompiled to run natively on PC. Pick your ISO, install with one click and skate San Vanelona at up to 4x the console's resolution.
 
-This fork of [christianortel/skate2-recompile-pc](https://github.com/christianortel/skate2-recompile-pc) adds **Skate2-PC-Setup.exe**. The game code is unchanged: `skate2.exe` and its DLLs are upstream's v0.1.1 build.
+[<img src="https://img.shields.io/badge/Download-Windows%20x64-ec7026?style=for-the-badge&logo=windows&logoColor=white&labelColor=111418" alt="Download for Windows" height="44">](https://github.com/ASarafanov/skate2recomp/releases/latest)
 
-1. Download **Skate2-PC-Setup-v0.2.0.exe** (or the `.zip` of it) from [Releases](../../releases/latest) and run it.
-2. Select your Skate 2 **ISO** (or an already extracted game folder with `default.xex` and `data`) and the **install folder**, then click **Install**. The setup checks the game and copies its files. You don't need to extract an ISO, and you don't need PowerShell or the Visual C++ installer. Archives such as `.rar` must be extracted first.
-3. Click **Play**, or start **Launch Skate 2.exe** in the install folder later. Hold **Shift** while it starts to change quality and FPS.
+[![Latest release](https://img.shields.io/github/v/release/ASarafanov/skate2recomp?style=flat-square&label=release&color=ec7026&labelColor=111418)](https://github.com/ASarafanov/skate2recomp/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ASarafanov/skate2recomp/total?style=flat-square&color=5b86ad&labelColor=111418)](https://github.com/ASarafanov/skate2recomp/releases)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Proton-5b86ad?style=flat-square&labelColor=111418)
+![Graphics](https://img.shields.io/badge/graphics-Direct3D%2012-5b86ad?style=flat-square&labelColor=111418)
 
-**Steam Deck / Linux:** in Desktop Mode, add the setup to Steam as a non-Steam game, force Proton, run it and install to the suggested `~/Games/Skate 2`. Then add the installed **Launch Skate 2.exe** the same way and play from Game Mode. Under Proton the defaults are 1× quality and 60 FPS. Proton and Steam Deck support has not been tested on a device yet.
+<br>
 
-Supported disc: Xbox 360, title ID `4541087F`, media ID `6ADB5821`. Original game files are not included. See [setup/README.md](setup/README.md) for details and building.
+<img src="docs/images/gif-street.gif" alt="An ollie between parked cars, a heelflip over a car and a slam on a downtown street" width="100%">
 
-The upstream instructions below still apply to its own player package.
+<img src="docs/images/game-street.jpg" alt="A kickflip in the middle of a downtown street" width="49%">
+<img src="docs/images/game-colonnade-heelflip.jpg" alt="A heelflip under a stone colonnade" width="49%">
+<img src="docs/images/game-heelflip.jpg" alt="A heelflip on an open plaza between office towers" width="49%">
+<img src="docs/images/game-menu.jpg" alt="The game's main menu" width="49%">
 
-**[Download Skate 2 PC for Windows](https://github.com/christianortel/skate2-recompile-pc/releases/latest)** — a compiled player package. No compiler or development tools are needed to play.
+<sub>Recorded on Windows 11 with 3x rendering (3456 × 1920) and 60 FPS, European Xbox 360 release. <b>No game files included</b>: you need your own copy of Skate 2.</sub>
+
+</div>
+
+## At a glance
+
+| | | |
+| :-- | :-- | :-- |
+| 💿 **One-file setup**<br>Choose your `.iso` (or extracted game folder) and an install folder; the setup does the rest. | 🖥️ **Up to 4x resolution**<br>Render at 1x to 4x the console's internal picture. | 🎞️ **60 FPS and beyond**<br>Original, 60 to 240 FPS or unlimited. |
+| 🛹 **The whole city**<br>Free Skate, the career and the replay editor run natively. | 🎮 **Controllers**<br>Xbox-style controls; a USB DualSense works without DS4Windows. | ⚙️ **PC settings**<br><kbd>F4</kbd> in the game, <kbd>Shift</kbd> at start for quality and FPS. |
+| 🔄 **Updates keep your saves**<br>A newer setup replaces only the program files. | 🐧 **Proton**<br>No PowerShell or .NET needed; built to run on Steam Deck. | 🧩 **Same game code as upstream**<br>Built on [skate2-recompile-pc](https://github.com/christianortel/skate2-recompile-pc). |
+
+> [!NOTE]
+> **Early days.** Free Skate, the start of the career and the replay editor work (the footage on this
+> page is from Free Skate). The game code comes from upstream, which has been tested for about an hour
+> of the career. **Steam Deck / Proton has not been tested on a device yet.** If something breaks,
+> please [report it](#reporting-a-problem).
+
+## In motion
+
+<div align="center">
+
+<img src="docs/images/gif-plaza.gif" alt="A kickflip and a heelflip on the downtown plaza" width="49%">
+<img src="docs/images/gif-grind.gif" alt="A heelflip into a frontside 50-50 grind on a curb, then a kickflip" width="49%">
+
+<sub><b>Flip tricks</b> on the plaza &nbsp;·&nbsp; <b>Heelflip into a frontside 50-50</b> on a curb</sub>
+
+<br>
+
+<img src="docs/images/gif-bail.gif" alt="A slam off a ledge" width="49%">
+<img src="docs/images/gif-replay.gif" alt="The replay editor playing back a slam into a car" width="49%">
+
+<sub><b>Slams</b>, ragdoll and all &nbsp;·&nbsp; The <b>replay editor</b> from the pause menu</sub>
+
+</div>
 
 ## Getting started
 
-1. Download **Skate2-PC-v0.1.1-Windows-x64.zip** from [Releases](https://github.com/christianortel/skate2-recompile-pc/releases/latest) and extract the entire ZIP into a writable folder.
-2. Run **Import Game Files.cmd** and select your extracted Xbox 360 game folder containing `default.xex` and `data`. This is a one-time copy and verification step.
-3. Connect your controller and run **Launch Skate 2.exe**.
+### Windows
 
-If the launcher requests the Microsoft Visual C++ x64 Runtime, open the included **Install Visual C++ Runtime.url**, run Microsoft's installer, then launch again. The [installation guide](docs/INSTALL.md) covers every step, the supported game revision, controls, and troubleshooting.
+1. Download **Skate2-PC-Setup-v0.2.0.exe** (or the `.zip` of it) from [Releases](https://github.com/ASarafanov/skate2recomp/releases/latest) and run it. The program is not code-signed, so Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**.
+2. Choose your Skate 2 `.iso` with **Browse...**, or drop it onto the window. An already extracted game folder (with `default.xex` and `data`) works too. Archives such as `.rar` must be extracted first.
+3. Pick the install folder (default `C:\Games\Skate 2`) and press **Install**. The setup checks the disc before copying anything. If the install is interrupted, run it again on the same folder to continue.
+4. Press **Play**. Later, start **Launch Skate 2.exe** in the install folder or from the Desktop / Start menu shortcut. It goes straight into the game.
 
-You will need:
+### Steam Deck and Linux (Proton)
 
-- A Windows 10/11 x64 PC with a Direct3D 12 GPU.
-- Windows PowerShell 5.1, included with Windows 10/11; the native launcher uses the existing startup script.
-- Your own extracted files from the [supported Xbox 360 game revision](docs/INSTALL.md#supported-game-version).
-- A controller. USB DualSense input works directly without DS4Windows; broader controller compatibility is still being tested.
+1. In Desktop Mode, add `Skate2-PC-Setup-v0.2.0.exe` to Steam as a non-Steam game, force a Proton version in **Properties → Compatibility**, and start it.
+2. Select your ISO and keep the suggested `~/Games/Skate 2`. When the install finishes, the setup shows the Linux path of `Launch Skate 2.exe`.
+3. Add that `Launch Skate 2.exe` to Steam the same way, force Proton, and play from Game Mode.
 
-Use the named Windows ZIP under **Releases**. GitHub's **Code → Download ZIP** and the automatically generated **Source code** archives are for developers; they do not contain the player executable.
+Under Proton the defaults are 1x quality and 60 FPS.
 
-Original game files are required and are not included or downloaded by this project. An ISO or compressed archive must be extracted before import.
+### Settings
 
-## Features
+| Where | What |
+| :-- | :-- |
+| <kbd>Shift</kbd> while **Launch Skate 2.exe** starts | Rendering quality (1x–4x), frame rate, render path (ROV / RTV), windowed. Saved in `launcher.ini`. |
+| <kbd>F4</kbd> in the game | PC settings: audio output, controls and more. Choose **Save to config** and restart. |
+| Launch options | `--render-scale N`, `--frame-rate X`, `--windowed`, or any `--flag=value` of the game. |
 
-- Native recompiled CPU code with Direct3D 12 graphics translation.
-- Free Skate, campaign gameplay, and instant replay.
-- Controller input, selectable audio output, and local saves.
-- Unlimited and paced frame-rate options.
-- 1× and 2× rendering profiles, with an experimental 4× option.
+Saves are in `userdata` inside the install folder. To update, run a newer setup on the same folder: it keeps `userdata`, `skate2.toml` and `launcher.ini`, and does not need the disc.
 
-Use **Launch Skate 2.exe** for the default **2× quality / unlimited FPS** profile. **Launch Skate 2.cmd** remains supported with the same settings. For lower GPU load, use **Launch Skate 2 - 1x Performance.cmd**. Performance depends on hardware, power mode, and scene complexity.
+### Requirements
 
-For Armoury Crate, add **Launch Skate 2.exe** as a custom game after completing the desktop import. Keep all package files together. See [Armoury Crate and ROG Ally setup](docs/INSTALL.md#armoury-crate-and-rog-ally); ROG Ally hardware has not been tested. Existing v0.1.0 players can follow the [upgrade steps](docs/INSTALL.md#saves-and-updates) without importing their game again.
+- Windows 10 or 11 x64 with a Direct3D 12 graphics card, or Linux / Steam Deck with Proton.
+- About 7 GB free.
+- The Xbox 360 release of Skate 2 with title ID `4541087F` and media ID `6ADB5821` (`default.xex` SHA-256 `116ba3ee37fcf0d8db60b7d47c971fdb6d3eb2a7a4d3cfc3611a06704a588ae5`). The setup tells you if your copy is a different release.
+- A controller.
 
-Testing includes Free Skate, campaign progression, instant replay, save/reload, Alt-Tab, direct USB DualSense input, and player-package relaunch. An approximately hour-long play session progressed further through the campaign without reported glitches. These results come from one Windows PC; full campaign completion and broader hardware compatibility have not been verified. See [release notes](docs/RELEASE_NOTES.md) and [known issues](docs/KNOWN_ISSUES.md).
+## Known limits
 
-## Guides
+- Not code-signed, so SmartScreen and some antivirus programs may warn.
+- Steam Deck / Proton has not been tested on a device yet.
+- Install paths with non-Latin characters (for example Cyrillic) are refused, because the game cannot open them.
+- Only one Xbox 360 release is supported (see above). The game code was compiled from it.
+- Game-side limits are upstream's: see its [known issues](docs/KNOWN_ISSUES.md) and [display notes](docs/DISPLAY.md).
 
-| Guide | Contents |
-| --- | --- |
-| [Installation and controls](docs/INSTALL.md) | Game revision, package setup, controller, audio, saves, and troubleshooting |
-| [Build from source](docs/BUILD.md) | Tool downloads and numbered build instructions |
-| [Display and performance](docs/DISPLAY.md) | Rendering quality, FPS options, monitors, 4K, and ultrawide status |
-| [Known issues and roadmap](docs/KNOWN_ISSUES.md) | Current limitations and planned work |
-| [How it works](docs/HOW_IT_WORKS.md) | Recompilation approach and project credits |
+## Building
+
+- **The setup** needs Visual Studio 2022 (or Build Tools) with C++ and Python 3. Run `setup\build.cmd`, then `python tools\package_setup.py`. The script packs upstream's prebuilt game (checked by SHA-256) and needs no game files. See [setup/README.md](setup/README.md).
+- **The game itself** (recompiling `skate2.exe` from your own `default.xex`) follows upstream's [build guide](docs/BUILD.md).
 
 ## Reporting a problem
 
-Found a glitch, crash, or installation problem? **[Submit a bug report](https://github.com/christianortel/skate2-recompile-pc/issues/new/choose)** so we can investigate. The form asks for the version, hardware, launcher, location, and steps to reproduce. Screenshots and short clips help. Remove personal paths from logs before sharing; do not upload game files or saves.
+[Open an issue](https://github.com/ASarafanov/skate2recomp/issues) and include:
 
-## License and credits
+- the Windows version, or Steam Deck with the Proton version;
+- your GPU;
+- what you did;
+- `launcher.log`, `setup.log` and the latest file from `logs` in the install folder.
 
-Newly authored port code and documentation are [MIT licensed](LICENSE). Dependencies and derived patches retain their respective licenses; see [third-party notices](THIRD_PARTY_NOTICES.md) and [credits](docs/HOW_IT_WORKS.md#credits).
+Remove personal paths from logs, and don't upload game files or saves. Problems inside the game may belong [upstream](https://github.com/christianortel/skate2-recompile-pc/issues).
 
-This is an independent fan project, unaffiliated with EA or its licensors. Skate 2 and its original game content belong to their respective rights holders. The project license does not cover the original game, its assets, or generated game-derived code.
+## Credits and license
+
+- The recompiled game, its runtime patches and the game configuration are the work of [christianortel/skate2-recompile-pc](https://github.com/christianortel/skate2-recompile-pc).
+- That project is built with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and [Xenia](https://github.com/xenia-project/xenia); see its [credits](docs/HOW_IT_WORKS.md#credits).
+- The setup and launcher in `setup/` were added in this fork.
+- Project code is [MIT licensed](LICENSE). Dependencies keep their own licenses; see the [third-party notices](THIRD_PARTY_NOTICES.md).
+
+This is an independent fan project, not affiliated with EA or its licensors. Skate 2 and its game content belong to their respective rights holders. The project license does not cover the original game, its assets or generated game-derived code.
