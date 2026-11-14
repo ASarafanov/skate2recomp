@@ -12,7 +12,10 @@
 #include <rex/cvar.h>
 #include <rex/graphics/native_guest_renderer.h>
 #include <rex/graphics/native_rhi.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
+
+#include <windows.h>
 
 #include <atomic>
 #include <cmath>
@@ -27,10 +30,28 @@ namespace {
 namespace nrhi = rex::graphics::nrhi;
 
 std::atomic<uint64_t> g_frames{0};
+std::atomic<uint64_t> g_calls{0};
+std::atomic<bool> g_flag_present{false};
+
+// Test mode can also be switched from outside while the game runs: the file
+// skate2-native-test.flag next to skate2.exe turns it on (checked about once
+// a second), e.g. created and removed over SSH on a Steam Deck.
+bool TestFlagFilePresent() {
+  if (g_calls.fetch_add(1, std::memory_order_relaxed) % 60 == 0) {
+    static const std::wstring path =
+        (rex::filesystem::GetExecutableFolder() / "skate2-native-test.flag").wstring();
+    g_flag_present.store(GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES,
+                         std::memory_order_relaxed);
+  }
+  return g_flag_present.load(std::memory_order_relaxed);
+}
 
 bool RenderGuestOutput(const rex::graphics::NativeGuestOutputRenderContext& context,
                        void* /*user_data*/) {
-  if (!REXCVAR_GET(skate2_native_test) || !context.cmd || !context.guest_output) {
+  // Test mode replaces only world frames, so menus stay usable.
+  const bool test = REXCVAR_GET(skate2_native_test) || TestFlagFilePresent();
+  if (!test || !Skate2WorldSceneActive() || !context.cmd ||
+      !context.guest_output) {
     return false;
   }
   const uint64_t frame = g_frames.fetch_add(1, std::memory_order_relaxed);

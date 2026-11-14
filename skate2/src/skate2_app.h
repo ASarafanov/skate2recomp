@@ -19,6 +19,7 @@
 #include <system_error>
 
 REXCVAR_DECLARE(std::string, skate2_dump_image);
+REXCVAR_DECLARE(std::string, skate2_perf_csv);
 
 class Skate2App : public rex::ReXApp {
  public:
@@ -71,6 +72,14 @@ class Skate2App : public rex::ReXApp {
       rex::perf::SetCsvLogPath(performance_path);
 #else
       REXLOG_WARN("Frame capture requested, but this SDK was built without Release performance counters.");
+#endif
+      performance_capture_started_ = true;
+    }
+    // Development alias settable from skate2.toml (e.g. over SSH on a Steam
+    // Deck, where Steam launch options mangle backslashes).
+    if (!performance_capture_started_ && !REXCVAR_GET(skate2_perf_csv).empty()) {
+#ifdef REXGLUE_ENABLE_PERF_COUNTERS
+      rex::perf::SetCsvLogPath(REXCVAR_GET(skate2_perf_csv));
 #endif
       performance_capture_started_ = true;
     }

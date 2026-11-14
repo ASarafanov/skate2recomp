@@ -20,6 +20,7 @@ set(SKATE2_SOURCES
     src/fast_fma.cpp
     src/render_wait.cpp
     src/native_render.cpp
+    src/native_probe.cpp
 )
 
 if(WIN32)

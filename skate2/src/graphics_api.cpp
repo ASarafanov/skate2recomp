@@ -21,6 +21,10 @@ REXCVAR_DEFINE_STRING(skate2_graphics_api, "auto", "Skate2",
     .allowed({"auto", "d3d12", "vulkan"})
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_STRING(skate2_perf_csv, "", "Skate2",
+                      "Debug: write the per-frame counter CSV to this file (settable from "
+                      "skate2.toml, unlike perf_log_csv); empty disables");
+
 REXCVAR_DEFINE_STRING(skate2_dump_image, "", "Skate2",
                       "Debug: write the loaded guest image to this file; empty disables");
 
