@@ -8,6 +8,7 @@
 // solid color. Otherwise it yields and the emulated GPU output is shown.
 
 #include "native_render.h"
+#include "native_world.h"
 
 #include <rex/cvar.h>
 #include <rex/graphics/native_guest_renderer.h>
@@ -32,6 +33,7 @@ namespace nrhi = rex::graphics::nrhi;
 std::atomic<uint64_t> g_frames{0};
 std::atomic<uint64_t> g_calls{0};
 std::atomic<bool> g_flag_present{false};
+std::atomic<bool> g_world_flag_present{false};
 
 // Test mode can also be switched from outside while the game runs: the file
 // skate2-native-test.flag next to skate2.exe turns it on (checked about once
@@ -42,6 +44,11 @@ bool TestFlagFilePresent() {
         (rex::filesystem::GetExecutableFolder() / "skate2-native-test.flag").wstring();
     g_flag_present.store(GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES,
                          std::memory_order_relaxed);
+    static const std::wstring world_path =
+        (rex::filesystem::GetExecutableFolder() / "skate2-native-world.flag").wstring();
+    g_world_flag_present.store(
+        GetFileAttributesW(world_path.c_str()) != INVALID_FILE_ATTRIBUTES,
+        std::memory_order_relaxed);
   }
   return g_flag_present.load(std::memory_order_relaxed);
 }
@@ -49,7 +56,12 @@ bool TestFlagFilePresent() {
 bool RenderGuestOutput(const rex::graphics::NativeGuestOutputRenderContext& context,
                        void* /*user_data*/) {
   // Test mode replaces only world frames, so menus stay usable.
-  const bool test = REXCVAR_GET(skate2_native_test) || TestFlagFilePresent();
+  TestFlagFilePresent();  // also refreshes the world flag
+  const bool world = g_world_flag_present.load(std::memory_order_relaxed);
+  if (Skate2WorldSceneActive() && NativeWorldRender(context, world)) {
+    return true;
+  }
+  const bool test = REXCVAR_GET(skate2_native_test) || g_flag_present.load();
   if (!test || !Skate2WorldSceneActive() || !context.cmd ||
       !context.guest_output) {
     return false;
