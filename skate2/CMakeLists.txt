@@ -22,6 +22,8 @@ set(SKATE2_SOURCES
     src/native_render.cpp
     src/native_probe.cpp
     src/native_world.cpp
+    src/native_draw_state.cpp
+    src/native_texture.cpp
 )
 
 if(WIN32)

@@ -180,6 +180,49 @@ extern "C" REX_FUNC(sub_82364648) {
                   "mesh={:08X}:{}\n vdesc(+28)={:08X}:{}\n material(+24)={:08X}:{}",
                   cam, vp, Hex(base, view, 64), Hex(base, cam, 192), geo, Hex(base, geo, 64), vdesc,
                   Hex(base, vdesc, 96), mat, Hex(base, mat, 96));
+      // Material channels (Skate 3 layout): material+0 count, +8 -> channels of
+      // 0x20 bytes: +0 name, +0x10 guid / float, +0x18 string, +0x1C stream
+      // record whose word 0 is the bound texture object.
+      for (uint32_t k = 0; k < 3 && k < ctx.r5.u32; ++k) {
+        const uint32_t m = ReadU32(base, list + (ctx.r4.u32 + k) * 8 + 4);
+        const uint32_t g = ReadU32(base, ReadU32(base, m));
+        const uint32_t material = ReadU32(base, g + 0x24);
+        const uint32_t n = ReadU32(base, material);
+        const uint32_t channels = ReadU32(base, material + 8);
+        std::string text;
+        for (uint32_t i = 0; i < n && i < 12; ++i) {
+          const uint32_t ch = channels + i * 0x20;
+          char name[24] = {};
+          uint8_t raw[24];
+          if (TryRead(base, ReadU32(base, ch), raw, sizeof(raw))) {
+            for (int j = 0; j < 23 && raw[j] >= 32 && raw[j] < 127; ++j) name[j] = char(raw[j]);
+          }
+          const uint32_t stream = ReadU32(base, ch + 0x1C);
+          const uint64_t guid = uint64_t(ReadU32(base, ch + 0x10)) << 32 | ReadU32(base, ch + 0x14);
+          const uint32_t tex = NativeWorldTextureForGuid(guid);
+          char tmp[200];
+          std::snprintf(tmp, sizeof(tmp), "\n   [%u] %-20s guid=%08X%08X str=%08X stream=%08X tex=%08X w7=%08X",
+                        i, name, ReadU32(base, ch + 0x10), ReadU32(base, ch + 0x14),
+                        ReadU32(base, ch + 0x18), stream, tex, ReadU32(base, tex + 28));
+          text += tmp;
+        }
+        REXLOG_INFO("Native probe material mesh={:08X} material={:08X} channels={} at {:08X}:{}",
+                    g, material, n, channels, text);
+        for (uint32_t i = 0; i < n && i < 12; ++i) {
+          const uint32_t ch = channels + i * 0x20;
+          const uint64_t guid = uint64_t(ReadU32(base, ch + 0x10)) << 32 | ReadU32(base, ch + 0x14);
+          const uint32_t tex = NativeWorldTextureForGuid(guid);
+          if (tex) {
+            uint32_t w[6];
+            for (int k = 0; k < 6; ++k) w[k] = ReadU32(base, tex + 0x1C + k * 4);
+            REXLOG_INFO("Native probe texture [{}] {:08X} fetch {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}: "
+                        "fmt={} endian={} tiled={} {}x{} swizzle={:03o}",
+                        i, tex, w[0], w[1], w[2], w[3], w[4], w[5], w[1] & 0x3F, (w[1] >> 6) & 3,
+                        (w[0] >> 31) & 1, (w[2] & 0x1FFF) + 1, ((w[2] >> 13) & 0x1FFF) + 1,
+                        (w[3] >> 1) & 0xFFF);
+          }
+        }
+      }
       // World-space check: project each entry's mesh bounding-box centre with
       // the camera view-projection, in both multiplication orders.
       {

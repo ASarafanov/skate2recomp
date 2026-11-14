@@ -9,6 +9,7 @@
 
 #include "native_render.h"
 #include "native_world.h"
+#include "native_draw_state.h"
 
 #include <rex/cvar.h>
 #include <rex/graphics/native_guest_renderer.h>
@@ -55,6 +56,7 @@ bool TestFlagFilePresent() {
 
 bool RenderGuestOutput(const rex::graphics::NativeGuestOutputRenderContext& context,
                        void* /*user_data*/) {
+  NativeDrawStateNewFrame();
   // Test mode replaces only world frames, so menus stay usable.
   TestFlagFilePresent();  // also refreshes the world flag
   const bool world = g_world_flag_present.load(std::memory_order_relaxed);
@@ -89,4 +91,5 @@ bool RenderGuestOutput(const rex::graphics::NativeGuestOutputRenderContext& cont
 
 void InstallSkate2NativeRenderer() {
   rex::graphics::SetNativeGuestOutputRenderer(&RenderGuestOutput, nullptr);
+  InstallSkate2DrawObserver();
 }

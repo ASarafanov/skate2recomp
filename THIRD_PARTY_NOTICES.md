@@ -6,6 +6,10 @@ This project uses [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) at revis
 
 `patches/rexglue-0.10.0-native-guest-renderer.patch` ports the native guest-output renderer interface and its Vulkan backend from [mchughalex/rexglue-skate3](https://github.com/mchughalex/rexglue-skate3) (the ReXGlue SDK fork used by [Skate 3 Recomp](https://github.com/mchughalex/skate3recomp)), under the same BSD 3-Clause license as ReXGlue. The other `vulkan-*` and `wine-ui-tick` patches are this project's own.
 
+### Skate 3 Recomp code
+
+Parts of the native renderer in `skate2/src` (the Xenos texture decode in `native_texture.cpp`, the world shader conventions in `native/shaders/world.hlsl`) are adapted from [mchughalex/skate3recomp](https://github.com/mchughalex/skate3recomp), used with the author's permission. Each adapted file names its source in its header.
+
 ## Dependency notices
 
 The `licenses` directory contains 45 upstream notice files, including selected source-file attributions and embedded font licenses. [NOTICE-INDEX.json](licenses/NOTICE-INDEX.json) records their sources, hashes, and distribution requirements. `scripts/Collect-Skate2Notices.ps1` verifies the collection against local SDK sources and recorded provenance.

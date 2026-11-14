@@ -119,6 +119,7 @@ Remove personal paths from logs, and don't upload game files or saves. Problems 
 - The recompiled game, its runtime patches and the game configuration are the work of [christianortel/skate2-recompile-pc](https://github.com/christianortel/skate2-recompile-pc).
 - That project is built with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and [Xenia](https://github.com/xenia-project/xenia); see its [credits](docs/HOW_IT_WORKS.md#credits).
 - The setup and launcher in `setup/` were added in this fork.
+- The experimental native renderer builds on [Skate 3 Recomp](https://github.com/mchughalex/skate3recomp) by mchughalex (code used with the author's permission) and its SDK fork [rexglue-skate3](https://github.com/mchughalex/rexglue-skate3) (BSD 3-Clause).
 - Project code is [MIT licensed](LICENSE). Dependencies keep their own licenses; see the [third-party notices](THIRD_PARTY_NOTICES.md).
 
 This is an independent fan project, not affiliated with EA or its licensors. Skate 2 and its game content belong to their respective rights holders. The project license does not cover the original game, its assets or generated game-derived code.
