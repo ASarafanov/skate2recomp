@@ -123,6 +123,7 @@ extern "C" REX_FUNC(sub_823A7420) {
 
 // RenderMesh(?, MeshContext* r4, VertexProgramState* r5).
 extern "C" REX_FUNC(sub_82365850) {
+  NativeWorldOnRenderMesh(base, ctx.r4.u32);
   if (Enabled()) {
     g_render_mesh.fetch_add(1, std::memory_order_relaxed);
     if (DumpFrame() && g_dumped_mesh.fetch_add(1) < 3) {

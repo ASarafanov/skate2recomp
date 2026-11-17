@@ -60,6 +60,7 @@ bool RenderGuestOutput(const rex::graphics::NativeGuestOutputRenderContext& cont
   // Test mode replaces only world frames, so menus stay usable.
   TestFlagFilePresent();  // also refreshes the world flag
   const bool world = g_world_flag_present.load(std::memory_order_relaxed);
+  NativeWorldPrepare(context);  // every frame, menus too
   if (Skate2WorldSceneActive() && NativeWorldRender(context, world)) {
     return true;
   }

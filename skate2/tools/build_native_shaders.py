@@ -25,6 +25,8 @@ OUT = os.path.join(ROOT, "skate2", "src", "native", "native_shaders_spirv.h")
 SHADERS = [
     ("world.hlsl", "vs_main", "vs_6_0", "kWorldVs"),
     ("world.hlsl", "ps_main", "ps_6_0", "kWorldPs"),
+    ("entity.hlsl", "vs_main", "vs_6_0", "kEntityVs"),
+    ("entity.hlsl", "ps_main", "ps_6_0", "kEntityPs"),
 ]
 FLAGS = ["-spirv", "-fspv-target-env=vulkan1.1", "-O3"]
 

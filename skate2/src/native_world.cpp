@@ -67,6 +67,11 @@ constexpr uint32_t kBufferAddress = 0x18;   // +0x18 address, +0x20 size
 
 constexpr uint32_t kMaxRecords = 8;
 constexpr uint32_t kConstantFloats = 36;  // world.hlsl cbuffer C
+constexpr uint32_t kEntityConstantFloats = 36;  // entity.hlsl cbuffer C
+constexpr uint32_t kEntityVertexBytes = 52;     // pos3 uv2 normal3 weights4 bones(u8x4)
+constexpr uint32_t kPaletteSlotBytes = 4096;     // 240 float4 rows (80 bones), aligned
+constexpr uint32_t kPaletteSlotsPerBlock = 128;
+constexpr uint32_t kPaletteBlocks = 4;
 constexpr uint32_t kMaxBuildsPerFrame = 96;
 constexpr uint32_t kMaxVertexBytes = 8u << 20;
 
@@ -85,6 +90,7 @@ struct Frame {
   float view_proj[16] = {};
   float eye[3] = {};  // camera position, solved from view_proj
   std::vector<Entry> entries;
+  std::vector<Entry> entities;  // RenderMesh draws (skater, pedestrians, props)
 };
 
 std::mutex g_frame_mutex;
@@ -194,6 +200,7 @@ struct MeshGpu {
   // Guest physical addresses, the keys of the emulated draw state.
   uint32_t vb_phys = 0;
   uint32_t ib_phys = 0;
+  bool skinned = false;  // entity mesh with bone indices and weights
   bool failed = false;
 };
 
@@ -209,6 +216,17 @@ struct Gpu {
   nrhi::Shader* ps = nullptr;
   // [cull][blend][depth write], built on first use (NativeDrawState enums).
   nrhi::Pipeline* pipelines[3][3][2] = {};
+  // Entities (RenderMesh): own layout, shaders and pipelines; bone palettes
+  // in a ring of upload memory, one block per frame in flight.
+  nrhi::BindingLayout* entity_layout = nullptr;
+  nrhi::Shader* entity_vs = nullptr;
+  nrhi::Shader* entity_ps = nullptr;
+  nrhi::Pipeline* entity_pipelines[3][3][2] = {};
+  nrhi::Buffer* palette = nullptr;
+  uint8_t* palette_map = nullptr;
+  uint64_t palette_block_submission[4] = {};
+  uint32_t palette_frame = 0;
+  std::unordered_map<uint32_t, MeshGpu> entity_meshes;
   nrhi::Format color_format = nrhi::Format::kUnknown;
   nrhi::Texture* depth = nullptr;
   uint32_t width = 0, height = 0;
@@ -389,6 +407,241 @@ MeshGpu BuildMesh(uint8_t* base, uint32_t mesh) {
   return out;
 }
 
+// ---- entities (RenderMesh) --------------------------------------------------
+
+nrhi::Pipeline* GetPipeline(nrhi::Format color_format, const NativeDrawState& state);
+
+// Signed k_10_11_11 (x 11 bits, y 11 bits, z 10 bits from the LSB), as the
+// game's vertex shaders fetch normals, tangents and binormals.
+void Unpack101111(uint32_t word, float out[3]) {
+  out[0] = float(int32_t(word << 21) >> 21) / 1023.0f;
+  out[1] = float(int32_t((word >> 11) << 21) >> 21) / 1023.0f;
+  out[2] = float(int32_t(word) >> 22) / 511.0f;
+}
+
+// Entity mesh: position (k_16_16_16_16 character dequantisation, half or
+// float), first texcoord, normal (stored, or tangent x binormal), bone weights
+// and indices. Vertex: pos3 uv2 normal3 weights4 (floats) + bones (u8x4).
+MeshGpu BuildEntityMesh(uint8_t* base, uint32_t mesh) {
+  MeshGpu out;
+  out.failed = true;
+  const uint32_t vdesc = ReadU32(base, mesh + kMeshVertexDescriptor);
+  const uint32_t ib = ReadU32(base, mesh + kMeshIndexBuffer);
+  const uint32_t vb = ReadU32(base, mesh + kMeshVertexBuffer);
+  uint8_t head[12];
+  if (!vdesc || !ib || !vb || !TryRead(base, vdesc, head, sizeof(head))) return out;
+  const uint32_t elements = Be32(head + 8) >> 16;
+  if (elements == 0 || elements > 32) return out;
+  uint8_t table[32 * 16 + 1];
+  if (!TryRead(base, vdesc + 0x10, table, elements * 16 + 1)) return out;
+  // D3DDECLUSAGE: 0 position, 1 blend weight, 2 blend indices, 3 normal,
+  // 5 texcoord, 6 tangent, 7 binormal.
+  int offset_of[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+  uint32_t format_of[8] = {};
+  for (uint32_t i = 0; i < elements; ++i) {
+    const uint8_t* e = table + i * 16;
+    if ((uint32_t(e[0]) << 8 | e[1]) != 0) continue;
+    const uint32_t usage = e[9];
+    if (usage < 8 && offset_of[usage] < 0) {
+      offset_of[usage] = int(uint32_t(e[2]) << 8 | e[3]);
+      format_of[usage] = Be32(e + 4) & 0x3F;
+    }
+  }
+  const uint32_t stride = table[elements * 16];
+  const uint32_t pos_format = format_of[0];
+  if (offset_of[0] < 0 || stride == 0 ||
+      (pos_format != 26 && pos_format != 32 && pos_format != 57)) {
+    return out;
+  }
+  const bool skinned = offset_of[1] >= 0 && offset_of[2] >= 0 && format_of[1] == 6 &&
+                       format_of[2] == 6;
+
+  uint8_t vb_words[12], ib_words[12];
+  if (!TryRead(base, vb + kBufferAddress, vb_words, 12) ||
+      !TryRead(base, ib + kBufferAddress, ib_words, 12)) {
+    return out;
+  }
+  const uint32_t vb_addr = Be32(vb_words) & 0xFFFFFFFCu;
+  const uint32_t vb_bytes = Be32(vb_words + 8);
+  const uint32_t ib_addr = Be32(ib_words) & 0xFFFFFFFCu;
+  const uint32_t ib_count = Be32(ib_words + 8);
+  if (!vb_addr || !ib_addr || !vb_bytes || !ib_count || vb_bytes % stride ||
+      vb_bytes > kMaxVertexBytes || ib_count > (kMaxVertexBytes / 2)) {
+    return out;
+  }
+  const uint32_t vertex_count = vb_bytes / stride;
+  std::vector<uint8_t> raw(vb_bytes);
+  if (!TryRead(base, vb_addr, raw.data(), vb_bytes)) return out;
+  std::vector<uint8_t> verts(size_t(vertex_count) * kEntityVertexBytes);
+  for (uint32_t v = 0; v < vertex_count; ++v) {
+    const uint8_t* vert = raw.data() + size_t(v) * stride;
+    float f[12] = {};
+    const uint8_t* p = vert + offset_of[0];
+    for (int c = 0; c < 3; ++c) {
+      if (pos_format == 57) {
+        const uint32_t bits = Be32(p + c * 4);
+        std::memcpy(&f[c], &bits, 4);
+      } else if (pos_format == 32) {
+        f[c] = HalfToFloat(uint16_t(p[c * 2] << 8 | p[c * 2 + 1]));
+      } else {
+        f[c] = int16_t(p[c * 2] << 8 | p[c * 2 + 1]) * (2.0f / 32767.0f);
+      }
+    }
+    if (pos_format == 26) f[1] += 0.8f;
+    if (offset_of[5] >= 0) DecodeUv(vert + offset_of[5], format_of[5], f[3], f[4]);
+    if (offset_of[3] >= 0 && format_of[3] == 16) {
+      Unpack101111(Be32(vert + offset_of[3]), f + 5);
+    } else if (offset_of[6] >= 0 && offset_of[7] >= 0 && format_of[6] == 16 &&
+               format_of[7] == 16) {
+      float t[3], b[3];
+      Unpack101111(Be32(vert + offset_of[6]), t);
+      Unpack101111(Be32(vert + offset_of[7]), b);
+      f[5] = t[1] * b[2] - t[2] * b[1];
+      f[6] = t[2] * b[0] - t[0] * b[2];
+      f[7] = t[0] * b[1] - t[1] * b[0];
+    }
+    uint32_t bones = 0;
+    if (skinned) {
+      // u8x4 components run from the low byte of the big-endian word; the
+      // game blends x, y, z and gives the fourth bone 1 - (x + y + z).
+      const uint32_t w = Be32(vert + offset_of[1]);
+      f[8] = float(w & 0xFF) / 255.0f;
+      f[9] = float((w >> 8) & 0xFF) / 255.0f;
+      f[10] = float((w >> 16) & 0xFF) / 255.0f;
+      f[11] = 1.0f - f[8] - f[9] - f[10];
+      bones = Be32(vert + offset_of[2]);
+    }
+    uint8_t* dst = &verts[size_t(v) * kEntityVertexBytes];
+    std::memcpy(dst, f, sizeof(f));
+    std::memcpy(dst + 48, &bones, 4);
+  }
+  std::vector<uint16_t> indices(ib_count);
+  if (!TryRead(base, ib_addr, indices.data(), ib_count * 2)) return out;
+  for (uint16_t& i : indices) i = uint16_t(i >> 8 | i << 8);
+
+  out.vb = UploadBuffer(g.device, verts.data(), uint32_t(verts.size()));
+  out.ib = UploadBuffer(g.device, indices.data(), ib_count * 2);
+  if (!out.vb || !out.ib) return out;
+  out.vb_bytes = uint32_t(verts.size());
+  out.ib_bytes = ib_count * 2;
+  out.vertex_count = vertex_count;
+  out.index_count = ib_count;
+  out.vb_phys = vb_addr & 0x1FFFFFFCu;
+  out.ib_phys = ib_addr & 0x1FFFFFFFu;
+  out.skinned = skinned;
+  ResolveMaterial(base, mesh, out);
+  out.failed = false;
+  return out;
+}
+
+// First palette row of the game's skinned vertex shaders (c7 unless listed).
+uint32_t PaletteBase(uint64_t vertex_shader) {
+  return vertex_shader == 0x8845ED4E9481A4BFull ? 8 : 7;
+}
+
+bool EnsureEntityShaders() {
+  if (g.entity_layout && g.entity_vs && g.entity_ps && g.palette_map) return true;
+  if (!g.entity_layout) {
+    nrhi::BindingLayoutDesc layout;
+    layout.params[0].kind = nrhi::BindingParamKind::kConstants;
+    layout.params[0].shader_register = 0;
+    layout.params[0].count = kEntityConstantFloats;
+    layout.params[1].kind = nrhi::BindingParamKind::kConstantBuffer;
+    layout.params[1].shader_register = 1;
+    layout.params[1].visibility = nrhi::Visibility::kVertex;
+    layout.params[2].kind = nrhi::BindingParamKind::kTextureTable;
+    layout.params[2].shader_register = 0;
+    layout.params[2].count = 1;
+    layout.params[2].visibility = nrhi::Visibility::kPixel;
+    layout.param_count = 3;
+    layout.static_samplers[0].shader_register = 0;
+    layout.static_samplers[0].filter = nrhi::Filter::kLinear;
+    layout.static_samplers[0].address = nrhi::AddressMode::kWrap;
+    layout.static_samplers[0].max_anisotropy = 8;
+    layout.static_sampler_count = 1;
+    g.entity_layout = g.device->CreateBindingLayout(layout);
+    namespace sh = skate2::native_shaders;
+    nrhi::ShaderDesc vs;
+    vs.stage = nrhi::ShaderStage::kVertex;
+    vs.name = "entity_vs";
+    vs.hlsl_source = sh::kEntityHlsl;
+    vs.entry_point = "vs_main";
+    vs.spirv = sh::kEntityVs;
+    vs.spirv_size_bytes = sizeof(sh::kEntityVs);
+    g.entity_vs = g.device->CreateShader(vs);
+    nrhi::ShaderDesc ps = vs;
+    ps.stage = nrhi::ShaderStage::kPixel;
+    ps.name = "entity_ps";
+    ps.entry_point = "ps_main";
+    ps.spirv = sh::kEntityPs;
+    ps.spirv_size_bytes = sizeof(sh::kEntityPs);
+    g.entity_ps = g.device->CreateShader(ps);
+  }
+  if (!g.palette) {
+    nrhi::BufferDesc desc;
+    // The UBO binding reads a 16 KiB window from each slot offset.
+    desc.size = uint64_t(kPaletteSlotBytes) * kPaletteSlotsPerBlock * kPaletteBlocks + 16384;
+    desc.heap = nrhi::HeapKind::kUpload;
+    g.palette = g.device->CreateBuffer(desc);
+    if (g.palette) g.palette_map = static_cast<uint8_t*>(g.device->Map(g.palette));
+  }
+  return g.entity_layout && g.entity_vs && g.entity_ps && g.palette_map;
+}
+
+nrhi::Pipeline* GetEntityPipeline(nrhi::Format color_format, const NativeDrawState& state) {
+  // GetPipeline owns the colour format and drops every variant when it changes.
+  if (g.color_format != color_format && !GetPipeline(color_format, state)) return nullptr;
+  nrhi::Pipeline*& slot = g.entity_pipelines[state.cull][state.blend][state.depth_write ? 1 : 0];
+  if (slot) return slot;
+  nrhi::InputElementDesc inputs[5];
+  inputs[0].semantic_name = "POSITION";
+  inputs[0].location = 0;
+  inputs[0].format = nrhi::Format::kR32G32B32_FLOAT;
+  inputs[1].semantic_name = "TEXCOORD";
+  inputs[1].location = 1;
+  inputs[1].format = nrhi::Format::kR32G32_FLOAT;
+  inputs[1].byte_offset = 12;
+  inputs[2].semantic_name = "NORMAL";
+  inputs[2].location = 2;
+  inputs[2].format = nrhi::Format::kR32G32B32_FLOAT;
+  inputs[2].byte_offset = 20;
+  inputs[3].semantic_name = "BLENDWEIGHT";
+  inputs[3].location = 3;
+  inputs[3].format = nrhi::Format::kR32G32B32A32_FLOAT;
+  inputs[3].byte_offset = 32;
+  inputs[4].semantic_name = "BLENDINDICES";
+  inputs[4].location = 4;
+  inputs[4].format = nrhi::Format::kR8G8B8A8_UINT;
+  inputs[4].byte_offset = 48;
+  nrhi::GraphicsPipelineDesc desc;
+  desc.layout = g.entity_layout;
+  desc.vs = g.entity_vs;
+  desc.ps = g.entity_ps;
+  desc.input_elements = inputs;
+  desc.input_element_count = 5;
+  desc.vertex_stride = kEntityVertexBytes;
+  desc.depth.test_enable = true;
+  desc.depth.write_enable = state.depth_write;
+  desc.depth.func = nrhi::CompareFunc::kLessEqual;
+  desc.cull = state.cull == NativeDrawState::kFront  ? nrhi::CullMode::kFront
+              : state.cull == NativeDrawState::kBack ? nrhi::CullMode::kBack
+                                                     : nrhi::CullMode::kNone;
+  if (state.blend == NativeDrawState::kAlpha) {
+    desc.blend.enable = true;
+    desc.blend.src = nrhi::BlendFactor::kSrcAlpha;
+    desc.blend.dst = nrhi::BlendFactor::kInvSrcAlpha;
+  } else if (state.blend == NativeDrawState::kAdditive) {
+    desc.blend.enable = true;
+    desc.blend.src = nrhi::BlendFactor::kOne;
+    desc.blend.dst = nrhi::BlendFactor::kOne;
+  }
+  desc.blend.write_mask = 0x7;
+  desc.rtv_format = color_format;
+  desc.dsv_format = nrhi::Format::kD32_FLOAT;
+  slot = g.device->CreateGraphicsPipeline(desc);
+  return slot;
+}
+
 bool EnsureWhite(nrhi::Cmd* cmd) {
   if (g.white_view) return true;
   nrhi::TextureDesc desc;
@@ -474,12 +727,13 @@ bool EnsureShaders() {
 
 nrhi::Pipeline* GetPipeline(nrhi::Format color_format, const NativeDrawState& state) {
   if (g.color_format != color_format) {
-    for (auto& a : g.pipelines)
-      for (auto& b : a)
-        for (nrhi::Pipeline*& p : b) {
-          if (p) g.device->DestroyDeferred(p);
-          p = nullptr;
-        }
+    for (auto* set : {&g.pipelines, &g.entity_pipelines})
+      for (auto& a : *set)
+        for (auto& b : a)
+          for (nrhi::Pipeline*& p : b) {
+            if (p) g.device->DestroyDeferred(p);
+            p = nullptr;
+          }
     g.color_format = color_format;
   }
   nrhi::Pipeline*& slot = g.pipelines[state.cull][state.blend][state.depth_write ? 1 : 0];
@@ -571,6 +825,23 @@ extern "C" REX_FUNC(sub_82B3BA88) {
   __imp__sub_82B3BA88(ctx, base);
 }
 
+// MeshContext -> mesh and its draw records.
+bool ReadEntry(uint8_t* base, uint32_t ctx, Entry& e) {
+  if (!ctx) return false;
+  e.mesh = ReadU32(base, ReadU32(base, ctx));
+  const uint32_t records = ReadU32(base, ctx + kCtxDrawRecords);
+  e.record_count = ReadU32(base, ctx + kCtxDrawCount);
+  if (!e.mesh || !records || e.record_count == 0) return false;
+  if (e.record_count > kMaxRecords) e.record_count = kMaxRecords;
+  uint8_t raw[kMaxRecords * 16];
+  if (!TryRead(base, records, raw, e.record_count * 16)) return false;
+  for (uint32_t r = 0; r < e.record_count; ++r) {
+    e.records[r] = {Be32(raw + r * 16), Be32(raw + r * 16 + 4), Be32(raw + r * 16 + 8),
+                    Be32(raw + r * 16 + 12)};
+  }
+  return true;
+}
+
 void NativeWorldOnDrawList(uint8_t* base, uint32_t view, uint32_t first, uint32_t count) {
   g_base.store(base, std::memory_order_relaxed);
   if (!(REXCVAR_GET(skate2_native_world) || g_capture_forced.load(std::memory_order_relaxed)) ||
@@ -593,22 +864,25 @@ void NativeWorldOnDrawList(uint8_t* base, uint32_t view, uint32_t first, uint32_
     SolveEye(g_building.view_proj, g_building.eye);
   }
   for (uint32_t k = 0; k < count; ++k) {
-    const uint32_t ctx = ReadU32(base, list + (first + k) * 8 + 4);
-    if (!ctx) continue;
     Entry e;
-    e.mesh = ReadU32(base, ReadU32(base, ctx));
-    const uint32_t records = ReadU32(base, ctx + kCtxDrawRecords);
-    e.record_count = ReadU32(base, ctx + kCtxDrawCount);
-    if (!e.mesh || !records || e.record_count == 0) continue;
-    if (e.record_count > kMaxRecords) e.record_count = kMaxRecords;
-    uint8_t raw[kMaxRecords * 16];
-    if (!TryRead(base, records, raw, e.record_count * 16)) continue;
-    for (uint32_t r = 0; r < e.record_count; ++r) {
-      e.records[r] = {Be32(raw + r * 16), Be32(raw + r * 16 + 4), Be32(raw + r * 16 + 8),
-                      Be32(raw + r * 16 + 12)};
+    if (ReadEntry(base, ReadU32(base, list + (first + k) * 8 + 4), e)) {
+      g_building.entries.push_back(e);
     }
-    g_building.entries.push_back(e);
   }
+}
+
+void NativeWorldOnRenderMesh(uint8_t* base, uint32_t mesh_context) {
+  if (!(REXCVAR_GET(skate2_native_world) || g_capture_forced.load(std::memory_order_relaxed))) {
+    return;
+  }
+  Entry e;
+  if (!ReadEntry(base, mesh_context, e)) return;
+  std::lock_guard<std::mutex> lock(g_frame_mutex);
+  // Shadow and main passes render the same mesh: keep it once.
+  for (const Entry& other : g_building.entities) {
+    if (other.mesh == e.mesh) return;
+  }
+  if (g_building.entities.size() < 256) g_building.entities.push_back(e);
 }
 
 void NativeWorldOnSwap() {
@@ -617,7 +891,36 @@ void NativeWorldOnSwap() {
     std::swap(g_published, g_building);
   }
   g_building.entries.clear();
+  g_building.entities.clear();
   g_building.view = 0;
+}
+
+// Builds every pipeline variant once, as soon as the device and the output
+// format are known (menus), so turning the native world on or meeting a new
+// state combination in play never compiles a pipeline mid-frame.
+void WarmPipelines(nrhi::Device* device, nrhi::Format format) {
+  static bool warmed = false;
+  if (warmed || !device || format == nrhi::Format::kUnknown) return;
+  g.device = device;
+  if (!EnsureShaders()) return;
+  NativeDrawState state;
+  for (uint8_t cull = 0; cull < 3; ++cull) {
+    for (uint8_t blend = 0; blend < 3; ++blend) {
+      for (int depth_write = 0; depth_write < 2; ++depth_write) {
+        state.cull = NativeDrawState::Cull(cull);
+        state.blend = NativeDrawState::Blend(blend);
+        state.depth_write = depth_write != 0;
+        GetPipeline(format, state);
+        if (EnsureEntityShaders()) GetEntityPipeline(format, state);
+      }
+    }
+  }
+  warmed = true;
+  REXLOG_INFO("Native world: {} pipeline variants built", 2 * 3 * 3 * 2);
+}
+
+void NativeWorldPrepare(const rex::graphics::NativeGuestOutputRenderContext& context) {
+  if (context.guest_output) WarmPipelines(context.device, context.guest_output->format());
 }
 
 bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& context,
@@ -690,6 +993,76 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
     }
   }
 
+  // Entities: each draw record takes the vertex shader constants of the
+  // game's matching emulated draw (clip matrix, bone palette, fog), copied
+  // into this frame's palette block. A draw seen for the first time is asked
+  // for and appears from the next frame on.
+  struct EntityItem {
+    const MeshGpu* mesh;
+    const DrawRecord* record;
+    nrhi::TextureView* diffuse;
+    NativeDrawState state;
+    float constants[kEntityConstantFloats];
+    uint32_t palette_offset;
+  };
+  std::vector<EntityItem> entity_items;
+  if (!frame.entities.empty() && EnsureEntityShaders()) {
+    const uint32_t block = g.palette_frame % kPaletteBlocks;
+    // Reuse the block only once the GPU is done with the frame that used it.
+    const bool block_free =
+        g.device->CompletedSubmission() >= g.palette_block_submission[block];
+    uint32_t slot = 0;
+    const NativeFrameConstants& world_fc = NativeDrawFrameConstants();
+    for (const Entry& e : frame.entities) {
+      if (!block_free) break;
+      auto it = g.entity_meshes.find(e.mesh);
+      if (it == g.entity_meshes.end()) {
+        if (builds >= kMaxBuildsPerFrame) continue;
+        ++builds;
+        it = g.entity_meshes.emplace(e.mesh, BuildEntityMesh(base, e.mesh)).first;
+        if (it->second.failed) ++g.failed_meshes;
+      }
+      const MeshGpu& m = it->second;
+      if (m.failed) continue;
+      nrhi::TextureView* diffuse = TextureView(cmd, base, m.diffuse, texture_budget);
+      for (uint32_t r = 0; r < e.record_count && slot < kPaletteSlotsPerBlock; ++r) {
+        const DrawRecord& rec = e.records[r];
+        if (rec.index_count == 0 || rec.start_index + rec.index_count > m.index_count) continue;
+        if (rec.prim != 4 && rec.prim != 6) continue;
+        const uint32_t index_base = m.ib_phys + rec.start_index * 2;
+        NativeDrawStateWantConstants(m.vb_phys, index_base);
+        uint64_t vertex_shader = 0;
+        const float* vs = NativeDrawStateConstants(m.vb_phys, index_base, &vertex_shader);
+        if (!vs) continue;
+        EntityItem item{&m, &rec, diffuse, {}, {}, 0};
+        NativeDrawStateLookup(m.vb_phys, index_base, item.state);
+        std::memcpy(item.constants, vs, 16 * sizeof(float));  // c0..c3 clip rows
+        if (m.skinned) {
+          std::memcpy(item.constants + 16, vs + 4 * 4, 12 * sizeof(float));  // c4..c6
+          const uint32_t first = PaletteBase(vertex_shader);
+          const uint32_t rows = std::min<uint32_t>(240, 256 - first);
+          item.palette_offset = (block * kPaletteSlotsPerBlock + slot) * kPaletteSlotBytes;
+          std::memcpy(g.palette_map + item.palette_offset, vs + first * 4,
+                      rows * 4 * sizeof(float));
+          ++slot;
+        }  // rigid meshes: no world position, no fog
+        item.constants[28] = m.skinned ? 1.0f : 0.0f;
+        item.constants[29] = world_fc.valid ? world_fc.exposure : 2.0f;
+        item.constants[30] = item.state.alpha_ref;
+        item.constants[31] = diffuse ? 1.0f : 0.0f;
+        // Sun direction of the game's world shaders (PS c4, Freeskate daytime).
+        item.constants[32] = 0.05036f;
+        item.constants[33] = 0.5552f;
+        item.constants[34] = 0.8302f;
+        entity_items.push_back(item);
+      }
+    }
+    if (block_free) {
+      g.palette_block_submission[block] = g.device->CurrentSubmission();
+      ++g.palette_frame;
+    }
+  }
+
   // Phase 2: the world pass, opaque (and alpha-tested) first, then blended in
   // draw-list order.
   cmd->Barrier(out, nrhi::ResourceState::kGuestOutput, nrhi::ResourceState::kRenderTarget);
@@ -757,15 +1130,53 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
     textured += d.diffuse ? 1 : 0;
   };
   for (const Item& d : opaque) draw(d);
+  uint32_t entity_drawn = 0;
+  auto draw_entities = [&](bool blended_pass) {
+    bool layout_set = false;
+    nrhi::Pipeline* entity_pipeline = nullptr;
+    const MeshGpu* entity_mesh = nullptr;
+    for (const EntityItem& d : entity_items) {
+      if ((d.state.blend != NativeDrawState::kOpaque) != blended_pass) continue;
+      nrhi::Pipeline* pipeline = GetEntityPipeline(out->format(), d.state);
+      if (!pipeline) continue;
+      if (!layout_set) {
+        cmd->SetBindingLayout(g.entity_layout);
+        layout_set = true;
+      }
+      if (pipeline != entity_pipeline) {
+        cmd->SetPipeline(pipeline);
+        entity_pipeline = pipeline;
+      }
+      cmd->SetRootConstants(0, kEntityConstantFloats, d.constants, 0);
+      cmd->SetConstantBuffer(1, g.palette, d.palette_offset);
+      cmd->SetTexture(2, d.diffuse ? d.diffuse : g.white_view);
+      if (d.mesh != entity_mesh) {
+        cmd->SetVertexBuffer(d.mesh->vb, 0, d.mesh->vb_bytes, kEntityVertexBytes);
+        cmd->SetIndexBuffer(d.mesh->ib, 0, d.mesh->ib_bytes);
+        entity_mesh = d.mesh;
+      }
+      cmd->SetPrimitiveTopology(d.record->prim == 4 ? nrhi::PrimitiveTopology::kTriangleList
+                                                    : nrhi::PrimitiveTopology::kTriangleStrip);
+      cmd->DrawIndexed(d.record->index_count, d.record->start_index,
+                       int32_t(d.record->base_vertex));
+      ++entity_drawn;
+    }
+  };
+  draw_entities(false);
+  cmd->SetBindingLayout(g.layout);
+  bound_pipeline = nullptr;
+  bound_mesh = nullptr;
   for (const Item& d : blended_items) draw(d);
+  draw_entities(true);
   cmd->Barrier(out, nrhi::ResourceState::kRenderTarget, nrhi::ResourceState::kGuestOutput);
   cmd->FlushBarriers();
   if (++g.frames % 300 == 1 || g.frames == 90) {
     REXLOG_INFO("Native world: {} entries, {} draws ({} textured, {} with game state, {} "
                 "alpha-tested, {} blended), {} meshes ({} failed), {} textures ({} failed), "
-                "{} built now",
+                "{} built now; {} entities, {} entity draws",
                 frame.entries.size(), drawn, textured, matched, alpha_tested, blended,
-                g.meshes.size(), g.failed_meshes, g.textures.size(), g.failed_textures, builds);
+                g.meshes.size(), g.failed_meshes, g.textures.size(), g.failed_textures, builds,
+                frame.entities.size(), entity_drawn);
   }
   return true;
 }

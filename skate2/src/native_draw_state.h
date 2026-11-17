@@ -37,3 +37,11 @@ void NativeDrawStateNewFrame();
 bool NativeDrawStateLookup(uint32_t vertex_buffer, uint32_t index_base, NativeDrawState& out);
 
 const NativeFrameConstants& NativeDrawFrameConstants();
+
+// Vertex shader constants (256 float4, the stage's view) of an emulated draw.
+// The renderer asks for the draws it needs (entities: their bone palette and
+// clip matrix live there); the observer keeps a copy of those from then on.
+void NativeDrawStateWantConstants(uint32_t vertex_buffer, uint32_t index_base);
+// Constants of that draw seen in the last two frames, or nullptr.
+const float* NativeDrawStateConstants(uint32_t vertex_buffer, uint32_t index_base,
+                                      uint64_t* vertex_shader = nullptr);

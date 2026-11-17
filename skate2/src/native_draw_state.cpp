@@ -16,8 +16,10 @@
 
 #include <rex/graphics/native_guest_renderer.h>
 
+#include <array>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -32,7 +34,15 @@ struct Entry {
   uint32_t frame = 0;
 };
 
+struct Constants {
+  uint32_t frame = 0;
+  uint64_t vertex_shader = 0;
+  std::array<float, 256 * 4> vs;
+};
+
 std::unordered_map<uint64_t, Entry> g_states;
+std::unordered_set<uint64_t> g_wanted;
+std::unordered_map<uint64_t, Constants> g_constants_by_draw;
 uint32_t g_frame = 1;
 // Draw count per render target pitch this frame; the main scene target is the
 // busiest one of the previous frame (shadow, reflection and lightmap-page
@@ -71,7 +81,14 @@ void Observe(const rex::graphics::NativeEmulatedDraw& d, void* /*user_data*/) {
     g_constants.valid = true;
   }
 
-  Entry& e = g_states[uint64_t(d.vertex_buffer) << 32 | d.index_base];
+  const uint64_t key = uint64_t(d.vertex_buffer) << 32 | d.index_base;
+  if (d.vs_constants && g_wanted.count(key)) {
+    Constants& c = g_constants_by_draw[key];
+    c.frame = g_frame;
+    c.vertex_shader = d.vertex_shader_hash;
+    std::memcpy(c.vs.data(), d.vs_constants, sizeof(float) * c.vs.size());
+  }
+  Entry& e = g_states[key];
   e.frame = g_frame;
   NativeDrawState& s = e.state;
   // RB_COLORCONTROL: alpha function (bits 0-2), alpha test enable (bit 3).
@@ -112,6 +129,12 @@ void NativeDrawStateNewFrame() {
   g_pitch_counts.clear();
   ++g_frame;
   // World streaming reuses buffer addresses: drop stale entries now and then.
+  if (g_wanted.size() > 4096) g_wanted.clear();
+  if (g_constants_by_draw.size() > 512) {
+    for (auto it = g_constants_by_draw.begin(); it != g_constants_by_draw.end();) {
+      it = g_frame - it->second.frame > 2 ? g_constants_by_draw.erase(it) : std::next(it);
+    }
+  }
   if (g_states.size() > 32768) {
     for (auto it = g_states.begin(); it != g_states.end();) {
       it = g_frame - it->second.frame > 2 ? g_states.erase(it) : std::next(it);
@@ -127,3 +150,15 @@ bool NativeDrawStateLookup(uint32_t vertex_buffer, uint32_t index_base, NativeDr
 }
 
 const NativeFrameConstants& NativeDrawFrameConstants() { return g_constants; }
+
+void NativeDrawStateWantConstants(uint32_t vertex_buffer, uint32_t index_base) {
+  g_wanted.insert(uint64_t(vertex_buffer) << 32 | index_base);
+}
+
+const float* NativeDrawStateConstants(uint32_t vertex_buffer, uint32_t index_base,
+                                      uint64_t* vertex_shader) {
+  auto it = g_constants_by_draw.find(uint64_t(vertex_buffer) << 32 | index_base);
+  if (it == g_constants_by_draw.end() || g_frame - it->second.frame > 2) return nullptr;
+  if (vertex_shader) *vertex_shader = it->second.vertex_shader;
+  return it->second.vs.data();
+}
