@@ -277,14 +277,124 @@ bool DecodeNativeTexture(nrhi::Device* device, nrhi::Cmd* cmd, uint8_t* base,
   return out.view != nullptr;
 }
 
-bool DecodeNativeTextureObject(nrhi::Device* device, nrhi::Cmd* cmd, uint8_t* base,
-                               uint32_t texture, NativeTexture& out) {
+bool ReadNativeTextureFetch(uint8_t* base, uint32_t texture, uint32_t words[6]) {
   uint8_t raw[24];
   if (!texture || !TryCopy(raw, base + texture + 0x1C, sizeof(raw))) return false;
-  uint32_t words[6];
   for (int i = 0; i < 6; ++i) {
     words[i] = uint32_t(raw[i * 4]) << 24 | uint32_t(raw[i * 4 + 1]) << 16 |
                uint32_t(raw[i * 4 + 2]) << 8 | raw[i * 4 + 3];
   }
+  return true;
+}
+
+bool DecodeNativeTextureObject(nrhi::Device* device, nrhi::Cmd* cmd, uint8_t* base,
+                               uint32_t texture, NativeTexture& out) {
+  uint32_t words[6];
+  if (!ReadNativeTextureFetch(base, texture, words)) return false;
   return DecodeNativeTexture(device, cmd, base, words, out);
+}
+
+// Average colour of each face of a guest environment cube (DXT1 or 8888),
+// faces in Xenos/D3D order +X, -X, +Y, -Y, +Z, -Z. The game samples its
+// environment cubes at a deep gradient LOD, so the reflection is close to the
+// face averages (Skate 3 Recomp's finding for the same engine).
+bool NativeCubeFaceAverages(uint8_t* base, uint32_t texture, float out[6][4]) {
+  uint32_t words[6];
+  if (!ReadNativeTextureFetch(base, texture, words)) return false;
+  xenos::xe_gpu_texture_fetch_t fetch = {};
+  fetch.dword_0 = words[0];
+  fetch.dword_1 = words[1];
+  fetch.dword_2 = words[2];
+  fetch.dword_3 = words[3];
+  fetch.dword_4 = words[4];
+  fetch.dword_5 = words[5];
+  if (fetch.type != xenos::FetchConstantType::kTexture || fetch.base_address == 0) return false;
+  const rex::graphics::FormatInfo* pre = rex::graphics::FormatInfo::Get(uint32_t(fetch.format));
+  if (!pre || pre->block_width == 0 || pre->block_height == 0 || pre->bytes_per_block() == 0) {
+    return false;
+  }
+  rex::graphics::TextureInfo info;
+  if (!rex::graphics::TextureInfo::Prepare(fetch, &info)) return false;
+  const xenos::TextureFormat format = rex::graphics::GetBaseFormat(info.format);
+  const bool dxt1 = format == xenos::TextureFormat::k_DXT1;
+  if (info.dimension != xenos::DataDimension::kCube || info.memory.base_address == 0 ||
+      (!dxt1 && format != xenos::TextureFormat::k_8_8_8_8) || info.width >= 1024) {
+    return false;
+  }
+  const uint32_t bpb = dxt1 ? 8u : 4u;
+  const uint32_t width = info.width + 1u, height = info.height + 1u;
+  const uint32_t cols = dxt1 ? (width + 3) / 4 : width, rows = dxt1 ? (height + 3) / 4 : height;
+  const uint32_t pitch = info.extent.block_pitch_h;
+  const uint32_t slice = info.extent.block_pitch_h * info.extent.block_pitch_v * bpb;
+  if (slice == 0 || slice > 4u * 1024u * 1024u) return false;
+  std::vector<uint8_t> data(size_t(slice) * 6);
+  if (!TryCopy(data.data(), base + (0xA0000000u | info.memory.base_address), data.size())) {
+    return false;
+  }
+  // Bring a 16/32-bit guest word to host order.
+  auto host16 = [&](const uint8_t* q) -> uint32_t {
+    return fetch.endianness == xenos::Endian::k8in16 || fetch.endianness == xenos::Endian::k8in32
+               ? uint32_t(q[0]) << 8 | q[1]
+               : uint32_t(q[1]) << 8 | q[0];
+  };
+  const uint32_t bpb_log2 = dxt1 ? 3u : 2u;
+  for (int face = 0; face < 6; ++face) {
+    const uint8_t* f = data.data() + size_t(slice) * face;
+    double sum[3] = {};
+    double count = 0.0;
+    for (uint32_t y = 0; y < rows; ++y) {
+      for (uint32_t x = 0; x < cols; ++x) {
+        const uint32_t offset =
+            info.is_tiled ? uint32_t(rex::graphics::texture_util::GetTiledOffset2D(
+                                int32_t(x), int32_t(y), pitch, bpb_log2))
+                          : (y * pitch + x) * bpb;
+        if (offset + bpb > slice) continue;
+        const uint8_t* b = f + offset;
+        if (dxt1) {
+          // Endian swaps move whole bytes, so the two colours sit in the first
+          // two 16-bit words (k8in32 swaps them) and the 2-bit index fields
+          // keep their counts.
+          uint32_t c0 = host16(b), c1 = host16(b + 2);
+          if (fetch.endianness == xenos::Endian::k8in32 || fetch.endianness == xenos::Endian::k16in32) {
+            std::swap(c0, c1);
+          }
+          float pal[4][3];
+          auto rgb = [](uint32_t c, float o[3]) {
+            o[0] = float((c >> 11) & 31) / 31.0f;
+            o[1] = float((c >> 5) & 63) / 63.0f;
+            o[2] = float(c & 31) / 31.0f;
+          };
+          rgb(c0, pal[0]);
+          rgb(c1, pal[1]);
+          for (int k = 0; k < 3; ++k) {
+            if (c0 > c1) {
+              pal[2][k] = (2.0f * pal[0][k] + pal[1][k]) / 3.0f;
+              pal[3][k] = (pal[0][k] + 2.0f * pal[1][k]) / 3.0f;
+            } else {
+              pal[2][k] = (pal[0][k] + pal[1][k]) * 0.5f;
+              pal[3][k] = 0.0f;
+            }
+          }
+          for (int i = 4; i < 8; ++i) {
+            for (int bit = 0; bit < 8; bit += 2) {
+              const int idx = (b[i] >> bit) & 3;
+              for (int k = 0; k < 3; ++k) sum[k] += pal[idx][k];
+              count += 1.0;
+            }
+          }
+        } else {
+          // 8888: ARGB in a big-endian word.
+          const uint32_t w = uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | b[3];
+          sum[0] += ((w >> 16) & 0xFF) / 255.0;
+          sum[1] += ((w >> 8) & 0xFF) / 255.0;
+          sum[2] += (w & 0xFF) / 255.0;
+          count += 1.0;
+        }
+      }
+    }
+    if (count == 0.0) return false;
+    for (int k = 0; k < 3; ++k) out[face][k] = float(sum[k] / count);
+    out[face][3] = 1.0f;
+  }
+  return true;
 }

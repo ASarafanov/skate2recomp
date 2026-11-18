@@ -1,9 +1,9 @@
 diff --git a/include/rex/graphics/native_guest_renderer.h b/include/rex/graphics/native_guest_renderer.h
 new file mode 100644
-index 0000000..6d4baef
+index 0000000..854b239
 --- /dev/null
 +++ b/include/rex/graphics/native_guest_renderer.h
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,151 @@
 +// Ported from mchughalex/rexglue-skate3 (branch skate3-sdk-clean,
 +// https://github.com/mchughalex/rexglue-skate3), the ReXGlue SDK fork used by
 +// Skate 3 Recomp. BSD 3-Clause License, see LICENSE in the root of this SDK.
@@ -124,6 +124,9 @@ index 0000000..6d4baef
 +  // applied); valid only during the callback.
 +  const float* vs_constants = nullptr;
 +  const float* ps_constants = nullptr;
++  // The 32 texture fetch constants (6 dwords each, register order); valid
++  // only during the callback.
++  const uint32_t* fetch_constants = nullptr;
 +};
 +
 +using NativeEmulatedDrawObserver = void (*)(const NativeEmulatedDraw& draw, void* user_data);
@@ -1130,7 +1133,7 @@ index 0000000..d8a1311
 +
 +}  // namespace rex::graphics::nrhi
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
-index f672b15..b826418 100644
+index f672b15..fbc7e34 100644
 --- a/src/graphics/vulkan/command_processor.cpp
 +++ b/src/graphics/vulkan/command_processor.cpp
 @@ -34,7 +34,9 @@
@@ -1238,7 +1241,7 @@ index f672b15..b826418 100644
          bool swap_source_requires_compute_rb_swap =
              !vulkan_device->properties().imageViewFormatSwizzle && swap_source_needs_rb_swap;
          auto select_swap_apply_gamma_compute_pipeline = [&](bool use_pwl,
-@@ -3748,6 +3824,48 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+@@ -3748,6 +3824,49 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
    VulkanShader::VulkanTranslation* pixel_shader_translation;
    bool memexport_writes_possible = memexport_used_vertex || memexport_used_pixel;
  
@@ -1272,6 +1275,7 @@ index f672b15..b826418 100644
 +        reinterpret_cast<const float*>(&regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X]);
 +    draw.vs_constants = constants + 4 * regs.Get<reg::SQ_VS_CONST>().base;
 +    draw.ps_constants = constants + 4 * regs.Get<reg::SQ_PS_CONST>().base;
++    draw.fetch_constants = &regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0];
 +    NotifyNativeEmulatedDraw(draw);
 +  }
 +
@@ -1287,7 +1291,7 @@ index f672b15..b826418 100644
    // Two iterations because a submission (even the current one - in which case
    // it needs to be ended, and a new one must be started) may need to be awaited
    // in case of a sampler count overflow, and if that happens, all subsystem
-@@ -4430,6 +4548,14 @@ bool VulkanCommandProcessor::IssueCopy() {
+@@ -4430,6 +4549,14 @@ bool VulkanCommandProcessor::IssueCopy() {
    SCOPE_profile_cpu_f("gpu");
  #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
  

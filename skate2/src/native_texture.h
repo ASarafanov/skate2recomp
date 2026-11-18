@@ -26,6 +26,14 @@ bool DecodeNativeTexture(rex::graphics::nrhi::Device* device, rex::graphics::nrh
 
 // Reads the fetch constant of a renderengine::Texture (a D3D texture header:
 // the six words start at +0x1C) and decodes it.
+// The fetch constant of a guest renderengine::Texture (six words at +0x1C,
+// host order). The game rewrites it when a texture's full mips stream in.
+bool ReadNativeTextureFetch(uint8_t* base, uint32_t texture, uint32_t words[6]);
+
+// Average colour of each face of a guest environment cube (+X, -X, +Y, -Y,
+// +Z, -Z); false when the texture is not a DXT1/8888 cube.
+bool NativeCubeFaceAverages(uint8_t* base, uint32_t texture, float out[6][4]);
+
 bool DecodeNativeTextureObject(rex::graphics::nrhi::Device* device,
                                rex::graphics::nrhi::Cmd* cmd, uint8_t* base, uint32_t texture,
                                NativeTexture& out);

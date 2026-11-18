@@ -41,8 +41,10 @@
 
 REXCVAR_DEFINE_INT32(skate2_native_lm_mode, 0, "Skate2",
                      "Native world shading: 0 the game's world shader, 1 diffuse only, "
-                     "2 lightmap intensity, 3 chromaticity, 4 game state found (green) or not (red)")
-    .range(0, 4)
+                     "2 lightmap intensity, 3 chromaticity, 4 game state found (green) or not "
+                     "(red), 5 material bump factor, 6 macro overlay, 7 sun specular, "
+                     "8 world normal, 9 environment reflection")
+    .range(0, 9)
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_BOOL(skate2_native_world, false, "Skate2",
@@ -66,10 +68,11 @@ constexpr uint32_t kMeshVertexBuffer = 0x34;
 constexpr uint32_t kBufferAddress = 0x18;   // +0x18 address, +0x20 size
 
 constexpr uint32_t kMaxRecords = 8;
-constexpr uint32_t kConstantFloats = 36;  // world.hlsl cbuffer C
+constexpr uint32_t kConstantFloats = 64;  // world.hlsl cbuffer C (the native RHI maximum)
 constexpr uint32_t kEntityConstantFloats = 36;  // entity.hlsl cbuffer C
 constexpr uint32_t kEntityVertexBytes = 52;     // pos3 uv2 normal3 weights4 bones(u8x4)
-constexpr uint32_t kPaletteSlotBytes = 4096;     // 240 float4 rows (80 bones), aligned
+constexpr uint32_t kPaletteSlotBytes = 4096;     // entity.hlsl Palette, aligned
+constexpr uint32_t kPaletteBoneRows = 216;       // 72 bones, then sh[9] and light[4]
 constexpr uint32_t kPaletteSlotsPerBlock = 128;
 constexpr uint32_t kPaletteBlocks = 4;
 constexpr uint32_t kMaxBuildsPerFrame = 96;
@@ -183,7 +186,8 @@ float HalfToFloat(uint16_t h) {
 
 // ---- GPU state (command thread only) ----------------------------------------
 
-constexpr uint32_t kVertexFloats = 7;  // position, texcoord 0, texcoord 1 (lightmap)
+// position, texcoord 0, texcoord 1 (lightmap), normal, tangent + binormal sign
+constexpr uint32_t kVertexFloats = 14;
 constexpr uint32_t kMaxTextureDecodesPerFrame = 48;
 
 struct MeshGpu {
@@ -196,6 +200,11 @@ struct MeshGpu {
   uint32_t diffuse = 0;   // guest renderengine::Texture (0 = none)
   uint32_t lightmap = 0;  // guest renderengine::Texture (0 = none)
   uint32_t chroma = 0;    // guest renderengine::Texture (0 = none)
+  uint32_t normal = 0;    // material channels of the main world material
+  uint32_t detail = 0;
+  uint32_t macro = 0;
+  uint32_t specular = 0;
+  uint32_t environment = 0;  // cube
   uint32_t lightmap_channel = 1;  // which lightmap channel holds this mesh's light
   // Guest physical addresses, the keys of the emulated draw state.
   uint32_t vb_phys = 0;
@@ -206,6 +215,7 @@ struct MeshGpu {
 
 struct TextureGpu {
   NativeTexture tex;
+  uint32_t fetch[6] = {};  // the fetch constant it was decoded from
   bool failed = false;
 };
 
@@ -222,6 +232,9 @@ struct Gpu {
   nrhi::Shader* entity_vs = nullptr;
   nrhi::Shader* entity_ps = nullptr;
   nrhi::Pipeline* entity_pipelines[3][3][2] = {};
+  nrhi::Pipeline* entity_shadow_pipeline = nullptr;
+  nrhi::Texture* shadow = nullptr;  // sun shadow atlas
+  nrhi::TextureView* shadow_view = nullptr;
   nrhi::Buffer* palette = nullptr;
   uint8_t* palette_map = nullptr;
   uint64_t palette_block_submission[4] = {};
@@ -234,9 +247,12 @@ struct Gpu {
   nrhi::TextureView* white_view = nullptr;
   std::unordered_map<uint32_t, MeshGpu> meshes;
   std::unordered_map<uint32_t, TextureGpu> textures;
+  // Environment cubes as their six face averages (a 6x1 texture each).
+  std::unordered_map<uint32_t, TextureGpu> env_cubes;
   uint64_t frames = 0;
   uint32_t failed_meshes = 0;
   uint32_t failed_textures = 0;
+  uint32_t redecoded_textures = 0;
 } g;
 
 nrhi::Buffer* UploadBuffer(nrhi::Device* device, const void* data, uint32_t bytes) {
@@ -299,8 +315,18 @@ void ResolveMaterial(uint8_t* base, uint32_t mesh, MeshGpu& out) {
       slot = &out.diffuse;
     } else if (std::memcmp(name, "lightmap", 9) == 0) {
       slot = &out.lightmap;
-    } else if (std::memcmp(name, "chromaticity", 11) == 0) {
+    } else if (std::memcmp(name, "chromaticity", 13) == 0) {
       slot = &out.chroma;
+    } else if (std::memcmp(name, "normal", 7) == 0) {
+      slot = &out.normal;
+    } else if (std::memcmp(name, "detail", 7) == 0) {
+      slot = &out.detail;
+    } else if (std::memcmp(name, "macrooverlay", 13) == 0) {
+      slot = &out.macro;
+    } else if (std::memcmp(name, "specular", 9) == 0) {
+      slot = &out.specular;
+    } else if (std::memcmp(name, "environment", 12) == 0) {
+      slot = &out.environment;
     }
     if (!slot || *slot) continue;
     // Lightmaps pack up to four meshes' intensity maps, one per channel; the
@@ -317,6 +343,8 @@ void ResolveMaterial(uint8_t* base, uint32_t mesh, MeshGpu& out) {
 // from +0x10 (stream u16 @0, offset u16 @2, type u32 @4 with the Xenos format
 // in the low 6 bits, usage u8 @9: 0 position, 5 texcoord), the stride byte
 // after the last element.
+void Unpack101111(uint32_t word, float out[3]);
+
 MeshGpu BuildMesh(uint8_t* base, uint32_t mesh) {
   MeshGpu out;
   out.failed = true;
@@ -329,7 +357,7 @@ MeshGpu BuildMesh(uint8_t* base, uint32_t mesh) {
   if (elements == 0 || elements > 32) return out;
   uint8_t table[32 * 16 + 1];
   if (!TryRead(base, vdesc + 0x10, table, elements * 16 + 1)) return out;
-  int pos_offset = -1, uv_offset = -1, uv2_offset = -1;
+  int pos_offset = -1, uv_offset = -1, uv2_offset = -1, tangent_offset = -1;
   uint32_t pos_format = 0, uv_format = 0, uv2_format = 0;
   for (uint32_t i = 0; i < elements; ++i) {
     const uint8_t* e = table + i * 16;
@@ -346,6 +374,8 @@ MeshGpu BuildMesh(uint8_t* base, uint32_t mesh) {
     } else if (e[9] == 5 && uv2_offset < 0) {
       uv2_offset = offset;
       uv2_format = format;
+    } else if (e[9] == 6 && tangent_offset < 0 && format == 16) {
+      tangent_offset = offset;
     }
   }
   const uint32_t stride = table[elements * 16];
@@ -387,7 +417,23 @@ MeshGpu BuildMesh(uint8_t* base, uint32_t mesh) {
       DecodeUv(vert + uv2_offset, uv2_format, dst[5], dst[6]);
       dst[5] = std::fabs(dst[5]);
       dst[6] = std::fabs(dst[6]);
+      if (uv2_format == 26) {
+        // The world material's vertex shader (E5C957221BEF0ECD): the same
+        // k_16_16_16_16 element carries the normal's x, y in z, w; the normal's
+        // z sign rides the sign of v and the binormal's sign that of u.
+        const uint8_t* q = vert + uv2_offset;
+        const float u = int16_t(q[0] << 8 | q[1]) / 32767.0f;
+        const float lv = int16_t(q[2] << 8 | q[3]) / 32767.0f;
+        const float nx = int16_t(q[4] << 8 | q[5]) / 32767.0f;
+        const float ny = int16_t(q[6] << 8 | q[7]) / 32767.0f;
+        const float nz = std::sqrt(1.0f - std::min(nx * nx + ny * ny, 0.999f));
+        dst[7] = nx;
+        dst[8] = ny;
+        dst[9] = lv > 0.0f ? nz : -nz;
+        dst[13] = u > 0.0f ? 1.0f : -1.0f;
+      }
     }
+    if (tangent_offset >= 0) Unpack101111(Be32(vert + tangent_offset), dst + 10);
   }
   std::vector<uint16_t> indices(ib_count);
   if (!TryRead(base, ib_addr, indices.data(), ib_count * 2)) return out;
@@ -534,6 +580,39 @@ MeshGpu BuildEntityMesh(uint8_t* base, uint32_t mesh) {
   return out;
 }
 
+// Character pixel shaders: where their lighting constants live. The game's
+// character shading (ucode of 3BE9E8635A346045): light = max(SH9(N), floor) *
+// ambient scale + fill + sun colour * saturate(N.L) * shadow; colour =
+// diffuse^2 * light + specular, fog, the tone curve with its own exposure.
+struct CharacterLayout {
+  uint64_t pixel_shader;
+  uint8_t sun_dir, exposure, sun_color, ambient_scale, fill, sh, floor;
+};
+constexpr CharacterLayout kCharacterLayouts[] = {
+    {0x3BE9E8635A346045ull, 0, 4, 6, 10, 11, 13, 253},
+    {0x305E195F3A92EE70ull, 3, 7, 9, 13, 14, 16, 255},
+    {0x7F1B252B79C1AD22ull, 3, 7, 9, 13, 14, 16, 255},
+};
+
+// Writes sh[9] and light[4] (entity.hlsl Palette) from the draw's pixel
+// shader constants; false for shaders not in the table.
+bool WriteCharacterLighting(const NativeDrawConstants& dc, float* out) {
+  for (const CharacterLayout& l : kCharacterLayouts) {
+    if (l.pixel_shader != dc.pixel_shader || !dc.ps) continue;
+    const float* c = dc.ps;
+    std::memcpy(out, c + l.sh * 4, 9 * 4 * sizeof(float));
+    float* light = out + 9 * 4;
+    std::memcpy(light, c + l.sun_dir * 4, 3 * sizeof(float));
+    light[3] = c[l.exposure * 4 + 2];
+    std::memcpy(light + 4, c + l.sun_color * 4, 3 * sizeof(float));
+    light[7] = c[l.ambient_scale * 4 + 3];
+    std::memcpy(light + 8, c + l.fill * 4, 4 * sizeof(float));
+    std::memcpy(light + 12, c + l.floor * 4, 4 * sizeof(float));
+    return true;
+  }
+  return false;
+}
+
 // First palette row of the game's skinned vertex shaders (c7 unless listed).
 uint32_t PaletteBase(uint64_t vertex_shader) {
   return vertex_shader == 0x8845ED4E9481A4BFull ? 8 : 7;
@@ -555,9 +634,12 @@ bool EnsureEntityShaders() {
     layout.params[2].visibility = nrhi::Visibility::kPixel;
     layout.param_count = 3;
     layout.static_samplers[0].shader_register = 0;
-    layout.static_samplers[0].filter = nrhi::Filter::kLinear;
+    // The game's world and character samplers: trilinear, anisotropic 4:1
+    // (texture fetch constants of its draws). nrhi enables anisotropy only
+    // for Filter::kAnisotropic.
+    layout.static_samplers[0].filter = nrhi::Filter::kAnisotropic;
     layout.static_samplers[0].address = nrhi::AddressMode::kWrap;
-    layout.static_samplers[0].max_anisotropy = 8;
+    layout.static_samplers[0].max_anisotropy = 4;
     layout.static_sampler_count = 1;
     g.entity_layout = g.device->CreateBindingLayout(layout);
     namespace sh = skate2::native_shaders;
@@ -642,6 +724,68 @@ nrhi::Pipeline* GetEntityPipeline(nrhi::Format color_format, const NativeDrawSta
   return slot;
 }
 
+// The sun shadow map: a 1024x512 depth atlas with the game's two cascades
+// side by side (left: X, Y; right: c1-scaled), drawn from the entities (the
+// game's own shadow pass at pitch 560 is suppressed). Depth is the game's
+// light depth c3.p stored as 0.5 + 0.05 z.
+constexpr uint32_t kShadowWidth = 1024, kShadowHeight = 512;
+
+bool EnsureShadow() {
+  if (g.shadow) return g.shadow_view != nullptr;
+  nrhi::TextureDesc desc;
+  desc.width = kShadowWidth;
+  desc.height = kShadowHeight;
+  desc.format = nrhi::Format::kD32_FLOAT;
+  desc.usage = nrhi::kTextureUsageDepthStencil;
+  desc.initial_state = nrhi::ResourceState::kPixelShaderResource;
+  desc.clear_depth = 1.0f;
+  g.shadow = g.device->CreateTexture(desc);
+  if (!g.shadow) return false;
+  nrhi::TextureViewDesc view;
+  g.shadow_view = g.device->CreateTextureView(g.shadow, view);
+  return g.shadow_view != nullptr;
+}
+
+nrhi::Pipeline* GetEntityShadowPipeline() {
+  if (g.entity_shadow_pipeline) return g.entity_shadow_pipeline;
+  nrhi::InputElementDesc inputs[5];
+  inputs[0].semantic_name = "POSITION";
+  inputs[0].location = 0;
+  inputs[0].format = nrhi::Format::kR32G32B32_FLOAT;
+  inputs[1].semantic_name = "TEXCOORD";
+  inputs[1].location = 1;
+  inputs[1].format = nrhi::Format::kR32G32_FLOAT;
+  inputs[1].byte_offset = 12;
+  inputs[2].semantic_name = "NORMAL";
+  inputs[2].location = 2;
+  inputs[2].format = nrhi::Format::kR32G32B32_FLOAT;
+  inputs[2].byte_offset = 20;
+  inputs[3].semantic_name = "BLENDWEIGHT";
+  inputs[3].location = 3;
+  inputs[3].format = nrhi::Format::kR32G32B32A32_FLOAT;
+  inputs[3].byte_offset = 32;
+  inputs[4].semantic_name = "BLENDINDICES";
+  inputs[4].location = 4;
+  inputs[4].format = nrhi::Format::kR8G8B8A8_UINT;
+  inputs[4].byte_offset = 48;
+  nrhi::GraphicsPipelineDesc desc;
+  desc.layout = g.entity_layout;
+  desc.vs = g.entity_vs;
+  desc.ps = g.entity_ps;
+  desc.input_elements = inputs;
+  desc.input_element_count = 5;
+  desc.vertex_stride = kEntityVertexBytes;
+  desc.depth.test_enable = true;
+  desc.depth.write_enable = true;
+  desc.depth.func = nrhi::CompareFunc::kLessEqual;
+  desc.cull = nrhi::CullMode::kNone;
+  desc.depth_clip = false;
+  desc.rtv_format = nrhi::Format::kUnknown;
+  desc.dsv_format = nrhi::Format::kD32_FLOAT;
+  g.entity_shadow_pipeline = g.device->CreateGraphicsPipeline(desc);
+  return g.entity_shadow_pipeline;
+}
+
 bool EnsureWhite(nrhi::Cmd* cmd) {
   if (g.white_view) return true;
   nrhi::TextureDesc desc;
@@ -668,19 +812,83 @@ bool EnsureWhite(nrhi::Cmd* cmd) {
   return g.white_view != nullptr;
 }
 
+// Environment cube -> 6x1 RGBA8 texture of its face averages, built on first
+// use (shares the decode budget); nullptr while unavailable or not a cube.
+nrhi::TextureView* EnvironmentView(nrhi::Cmd* cmd, uint8_t* base, uint32_t texture,
+                                   uint32_t& budget) {
+  if (!texture) return nullptr;
+  auto it = g.env_cubes.find(texture);
+  if (it == g.env_cubes.end()) {
+    if (budget == 0) return nullptr;
+    --budget;
+    TextureGpu t;
+    float faces[6][4];
+    t.failed = !NativeCubeFaceAverages(base, texture, faces);
+    if (!t.failed) {
+      nrhi::TextureDesc desc;
+      desc.width = 6;
+      desc.height = 1;
+      desc.format = nrhi::Format::kR8G8B8A8_UNORM;
+      desc.initial_state = nrhi::ResourceState::kCopyDest;
+      t.tex.texture = g.device->CreateTexture(desc);
+      nrhi::BufferDesc up;
+      up.size = nrhi::kRowPitchAlignment;
+      up.heap = nrhi::HeapKind::kUpload;
+      up.bind_class = nrhi::BufferBindClass::kCopySrc;
+      nrhi::Buffer* upload = t.tex.texture ? g.device->CreateBuffer(up) : nullptr;
+      if (upload) {
+        uint8_t* px = static_cast<uint8_t*>(g.device->Map(upload));
+        for (int f = 0; f < 6; ++f) {
+          for (int k = 0; k < 4; ++k) {
+            px[f * 4 + k] = uint8_t(std::clamp(faces[f][k], 0.0f, 1.0f) * 255.0f + 0.5f);
+          }
+        }
+        g.device->Unmap(upload);
+        cmd->CopyBufferToTexture(t.tex.texture, 0, 0, upload, 0, nrhi::kRowPitchAlignment, 6, 1,
+                                 1);
+        cmd->Barrier(t.tex.texture, nrhi::ResourceState::kCopyDest,
+                     nrhi::ResourceState::kPixelShaderResource);
+        g.device->DestroyDeferred(upload);
+        nrhi::TextureViewDesc view;
+        t.tex.view = g.device->CreateTextureView(t.tex.texture, view);
+      }
+      t.failed = t.tex.view == nullptr;
+    }
+    it = g.env_cubes.emplace(texture, t).first;
+  }
+  return it->second.failed ? nullptr : it->second.tex.view;
+}
+
 // Returns the view of a decoded guest texture, decoding it on first use
 // (bounded per frame by `budget`); nullptr while unavailable.
 nrhi::TextureView* TextureView(nrhi::Cmd* cmd, uint8_t* base, uint32_t texture,
                                uint32_t& budget) {
   if (!texture) return nullptr;
+  uint32_t fetch[6];
+  if (!ReadNativeTextureFetch(base, texture, fetch)) return nullptr;
   auto it = g.textures.find(texture);
-  if (it == g.textures.end()) {
-    if (budget == 0) return nullptr;
+  // Streaming swaps a texture's data in place: a low-resolution placeholder
+  // first, the full mips later, under the same object with a new fetch
+  // constant. Decode again when it changes.
+  const bool stale = it != g.textures.end() &&
+                     std::memcmp(it->second.fetch, fetch, sizeof(fetch)) != 0;
+  if (it == g.textures.end() || stale) {
+    if (budget == 0) {
+      return it != g.textures.end() && !it->second.failed ? it->second.tex.view : nullptr;
+    }
     --budget;
     TextureGpu t;
-    t.failed = !DecodeNativeTextureObject(g.device, cmd, base, texture, t.tex);
+    std::memcpy(t.fetch, fetch, sizeof(fetch));
+    t.failed = !DecodeNativeTexture(g.device, cmd, base, fetch, t.tex);
     if (t.failed) ++g.failed_textures;
-    it = g.textures.emplace(texture, t).first;
+    if (stale) {
+      g.device->DestroyDeferred(it->second.tex.view);
+      g.device->DestroyDeferred(it->second.tex.texture);
+      it->second = t;
+      ++g.redecoded_textures;
+    } else {
+      it = g.textures.emplace(texture, t).first;
+    }
   }
   return it->second.failed ? nullptr : it->second.tex.view;
 }
@@ -692,18 +900,30 @@ bool EnsureShaders() {
     layout.params[0].shader_register = 0;
     layout.params[0].count = kConstantFloats;  // see world.hlsl cbuffer C
     layout.params[1].kind = nrhi::BindingParamKind::kTextureTable;
-    layout.params[1].shader_register = 0;  // t0 diffuse, t1 lightmap, t2 chromaticity
-    layout.params[1].count = 3;
+    // t0 diffuse, t1 lightmap, t2 chromaticity, t3 normal, t4 detail,
+    // t5 macro overlay, t6 specular, t7 environment (cube face averages)
+    layout.params[1].shader_register = 0;
+    layout.params[1].count = 8;
     layout.params[1].visibility = nrhi::Visibility::kPixel;
-    layout.param_count = 2;
+    layout.params[2].kind = nrhi::BindingParamKind::kTextureTable;
+    layout.params[2].shader_register = 8;  // t8 sun shadow atlas
+    layout.params[2].count = 1;
+    layout.params[2].visibility = nrhi::Visibility::kPixel;
+    layout.param_count = 3;
     layout.static_samplers[0].shader_register = 0;
-    layout.static_samplers[0].filter = nrhi::Filter::kLinear;
+    // The game's world and character samplers: trilinear, anisotropic 4:1
+    // (texture fetch constants of its draws). nrhi enables anisotropy only
+    // for Filter::kAnisotropic.
+    layout.static_samplers[0].filter = nrhi::Filter::kAnisotropic;
     layout.static_samplers[0].address = nrhi::AddressMode::kWrap;
-    layout.static_samplers[0].max_anisotropy = 8;
+    layout.static_samplers[0].max_anisotropy = 4;
     layout.static_samplers[1].shader_register = 1;
     layout.static_samplers[1].filter = nrhi::Filter::kLinear;
     layout.static_samplers[1].address = nrhi::AddressMode::kClamp;
-    layout.static_sampler_count = 2;
+    layout.static_samplers[2].shader_register = 2;
+    layout.static_samplers[2].filter = nrhi::Filter::kPoint;
+    layout.static_samplers[2].address = nrhi::AddressMode::kClamp;
+    layout.static_sampler_count = 3;
     g.layout = g.device->CreateBindingLayout(layout);
     namespace sh = skate2::native_shaders;
     nrhi::ShaderDesc vs;
@@ -738,7 +958,7 @@ nrhi::Pipeline* GetPipeline(nrhi::Format color_format, const NativeDrawState& st
   }
   nrhi::Pipeline*& slot = g.pipelines[state.cull][state.blend][state.depth_write ? 1 : 0];
   if (slot) return slot;
-  nrhi::InputElementDesc inputs[3];
+  nrhi::InputElementDesc inputs[5];
   inputs[0].semantic_name = "POSITION";
   inputs[0].location = 0;
   inputs[0].format = nrhi::Format::kR32G32B32_FLOAT;
@@ -752,12 +972,20 @@ nrhi::Pipeline* GetPipeline(nrhi::Format color_format, const NativeDrawState& st
   inputs[2].location = 2;
   inputs[2].format = nrhi::Format::kR32G32_FLOAT;
   inputs[2].byte_offset = 20;
+  inputs[3].semantic_name = "NORMAL";
+  inputs[3].location = 3;
+  inputs[3].format = nrhi::Format::kR32G32B32_FLOAT;
+  inputs[3].byte_offset = 28;
+  inputs[4].semantic_name = "TANGENT";
+  inputs[4].location = 4;
+  inputs[4].format = nrhi::Format::kR32G32B32A32_FLOAT;
+  inputs[4].byte_offset = 40;
   nrhi::GraphicsPipelineDesc desc;
   desc.layout = g.layout;
   desc.vs = g.vs;
   desc.ps = g.ps;
   desc.input_elements = inputs;
-  desc.input_element_count = 3;
+  desc.input_element_count = 5;
   desc.vertex_stride = kVertexFloats * 4;
   desc.depth.test_enable = true;
   desc.depth.write_enable = state.depth_write;
@@ -955,6 +1183,7 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
     nrhi::TextureView* diffuse;
     nrhi::TextureView* lightmap;
     nrhi::TextureView* chroma;
+    nrhi::TextureView* material[5];  // normal, detail, macro, specular, environment
     NativeDrawState state;
     bool matched;
   };
@@ -975,11 +1204,18 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
     nrhi::TextureView* diffuse = TextureView(cmd, base, m.diffuse, texture_budget);
     nrhi::TextureView* lightmap = TextureView(cmd, base, m.lightmap, texture_budget);
     nrhi::TextureView* chroma = TextureView(cmd, base, m.chroma, texture_budget);
+    nrhi::TextureView* material[5] = {TextureView(cmd, base, m.normal, texture_budget),
+                                      TextureView(cmd, base, m.detail, texture_budget),
+                                      TextureView(cmd, base, m.macro, texture_budget),
+                                      TextureView(cmd, base, m.specular, texture_budget),
+                                      EnvironmentView(cmd, base, m.environment, texture_budget)};
     for (uint32_t r = 0; r < e.record_count; ++r) {
       const DrawRecord& rec = e.records[r];
       if (rec.index_count == 0 || rec.start_index + rec.index_count > m.index_count) continue;
       if (rec.prim != 4 && rec.prim != 6) continue;
-      Item item{&m, &rec, diffuse, lightmap, chroma, {}, false};
+      Item item{&m, &rec, diffuse, lightmap, chroma,
+                {material[0], material[1], material[2], material[3], material[4]}, {},
+                false};
       item.matched =
           NativeDrawStateLookup(m.vb_phys, m.ib_phys + rec.start_index * 2, item.state);
       matched += item.matched;
@@ -1031,23 +1267,27 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
         if (rec.prim != 4 && rec.prim != 6) continue;
         const uint32_t index_base = m.ib_phys + rec.start_index * 2;
         NativeDrawStateWantConstants(m.vb_phys, index_base);
-        uint64_t vertex_shader = 0;
-        const float* vs = NativeDrawStateConstants(m.vb_phys, index_base, &vertex_shader);
-        if (!vs) continue;
+        NativeDrawConstants dc;
+        if (!NativeDrawStateConstants(m.vb_phys, index_base, dc)) continue;
+        const float* vs = dc.vs;
         EntityItem item{&m, &rec, diffuse, {}, {}, 0};
         NativeDrawStateLookup(m.vb_phys, index_base, item.state);
         std::memcpy(item.constants, vs, 16 * sizeof(float));  // c0..c3 clip rows
+        // Slot: the bone palette, then the character lighting (entity.hlsl).
+        item.palette_offset = (block * kPaletteSlotsPerBlock + slot) * kPaletteSlotBytes;
+        float* slot_rows = reinterpret_cast<float*>(g.palette_map + item.palette_offset);
+        ++slot;
         if (m.skinned) {
           std::memcpy(item.constants + 16, vs + 4 * 4, 12 * sizeof(float));  // c4..c6
-          const uint32_t first = PaletteBase(vertex_shader);
-          const uint32_t rows = std::min<uint32_t>(240, 256 - first);
-          item.palette_offset = (block * kPaletteSlotsPerBlock + slot) * kPaletteSlotBytes;
-          std::memcpy(g.palette_map + item.palette_offset, vs + first * 4,
-                      rows * 4 * sizeof(float));
-          ++slot;
+          const uint32_t first = PaletteBase(dc.vertex_shader);
+          const uint32_t rows = std::min<uint32_t>(kPaletteBoneRows, 256 - first);
+          std::memcpy(slot_rows, vs + first * 4, rows * 4 * sizeof(float));
         }  // rigid meshes: no world position, no fog
+        const bool lit = WriteCharacterLighting(dc, slot_rows + kPaletteBoneRows * 4);
         item.constants[28] = m.skinned ? 1.0f : 0.0f;
-        item.constants[29] = world_fc.valid ? world_fc.exposure : 2.0f;
+        item.constants[29] = lit ? slot_rows[(kPaletteBoneRows + 9) * 4 + 3]
+                                 : (world_fc.valid ? world_fc.exposure : 2.0f);
+        item.constants[35] = lit ? 1.0f : 0.0f;
         item.constants[30] = item.state.alpha_ref;
         item.constants[31] = diffuse ? 1.0f : 0.0f;
         // Sun direction of the game's world shaders (PS c4, Freeskate daytime).
@@ -1061,6 +1301,62 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
       g.palette_block_submission[block] = g.device->CurrentSubmission();
       ++g.palette_frame;
     }
+  }
+
+  // Sun shadow map from the skinned entities, before the world pass.
+  bool shadow_drawn = false;
+  const NativeFrameConstants& sfc = NativeDrawFrameConstants();
+  if (sfc.shadow_valid && !entity_items.empty() && EnsureShadow() && GetEntityShadowPipeline()) {
+    cmd->Barrier(g.shadow, nrhi::ResourceState::kPixelShaderResource,
+                 nrhi::ResourceState::kDepthWrite);
+    cmd->FlushBarriers();
+    cmd->SetRenderTargets(nullptr, g.shadow);
+    cmd->ClearDepth(g.shadow, 1.0f);
+    cmd->SetBindingLayout(g.entity_layout);
+    cmd->SetPipeline(g.entity_shadow_pipeline);
+    const float* c = sfc.shadow;
+    for (int cascade = 0; cascade < 2; ++cascade) {
+      nrhi::Viewport vp;
+      vp.x = float(cascade * kShadowWidth / 2);
+      vp.width = float(kShadowWidth / 2);
+      vp.height = float(kShadowHeight);
+      cmd->SetViewport(vp);
+      nrhi::Rect rect;
+      rect.left = int32_t(cascade * kShadowWidth / 2);
+      rect.right = rect.left + int32_t(kShadowWidth / 2);
+      rect.bottom = int32_t(kShadowHeight);
+      cmd->SetScissor(rect);
+      // Light clip rows: X, Y (scaled for the second cascade), stored depth, 1.
+      const float sx = cascade ? c[4] : 1.0f, ox = cascade ? c[6] : 0.0f;
+      const float sy = cascade ? c[5] : 1.0f, oy = cascade ? c[7] : 0.0f;
+      float rows[16] = {c[0] * sx, c[1] * sx, c[2] * sx, c[3] * sx + ox,
+                        c[8] * sy, c[9] * sy, c[10] * sy, c[11] * sy + oy,
+                        c[12] * 0.05f, c[13] * 0.05f, c[14] * 0.05f, c[15] * 0.05f + 0.5f,
+                        0.0f, 0.0f, 0.0f, 1.0f};
+      const MeshGpu* shadow_mesh = nullptr;
+      for (const EntityItem& d : entity_items) {
+        if (!d.mesh->skinned) continue;  // rigid entities carry no world position
+        float constants_shadow[kEntityConstantFloats];
+        std::memcpy(constants_shadow, d.constants, sizeof(constants_shadow));
+        std::memcpy(constants_shadow, rows, sizeof(rows));
+        cmd->SetRootConstants(0, kEntityConstantFloats, constants_shadow, 0);
+        cmd->SetConstantBuffer(1, g.palette, d.palette_offset);
+        cmd->SetTexture(2, d.diffuse ? d.diffuse : g.white_view);
+        if (d.mesh != shadow_mesh) {
+          cmd->SetVertexBuffer(d.mesh->vb, 0, d.mesh->vb_bytes, kEntityVertexBytes);
+          cmd->SetIndexBuffer(d.mesh->ib, 0, d.mesh->ib_bytes);
+          shadow_mesh = d.mesh;
+        }
+        cmd->SetPrimitiveTopology(d.record->prim == 4 ? nrhi::PrimitiveTopology::kTriangleList
+                                                      : nrhi::PrimitiveTopology::kTriangleStrip);
+        cmd->DrawIndexed(d.record->index_count, d.record->start_index,
+                         int32_t(d.record->base_vertex));
+      }
+    }
+    cmd->Barrier(g.shadow, nrhi::ResourceState::kDepthWrite,
+                 nrhi::ResourceState::kPixelShaderResource);
+    cmd->FlushBarriers();
+    shadow_drawn = true;
   }
 
   // Phase 2: the world pass, opaque (and alpha-tested) first, then blended in
@@ -1095,6 +1391,13 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
   constants[22] = frame.eye[2];
   std::memcpy(constants + 24, fc.valid ? fc.fog : default_fog, 4 * sizeof(float));
   std::memcpy(constants + 28, fc.valid ? fc.fog_color : default_fog_color, 4 * sizeof(float));
+  // Sun direction of the main world material (PS c4); Freeskate daytime until seen.
+  const float default_sun[4] = {0.05036f, 0.5552f, 0.8302f, 0.0f};
+  std::memcpy(constants + 40, fc.sun_valid ? fc.sun : default_sun, 4 * sizeof(float));
+  if (shadow_drawn) {
+    std::memcpy(constants + 44, sfc.shadow, 16 * sizeof(float));
+    constants[60] = 1.0f;
+  }
 
   uint32_t drawn = 0, textured = 0;
   nrhi::Pipeline* bound_pipeline = nullptr;
@@ -1112,11 +1415,25 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
     constants[32] = d.state.alpha_ref;
     constants[33] = d.state.depth_offset ? 1.0f : 0.0f;
     constants[34] = d.matched ? 1.0f : 0.0f;
+    // The main world material path needs its four material textures.
+    const bool material_path = d.state.macro_scale > 0.0f && d.material[0] && d.material[1] &&
+                               d.material[2] && d.material[3] && d.diffuse && d.lightmap &&
+                               d.chroma;
+    constants[36] = d.state.macro_scale;
+    constants[37] = d.state.detail_scale;
+    constants[38] = material_path ? 1.0f : 0.0f;
+    constants[39] = d.material[4] ? 1.0f : 0.0f;
     cmd->SetRootConstants(0, kConstantFloats, constants, 0);
-    nrhi::TextureView* views[3] = {d.diffuse ? d.diffuse : g.white_view,
+    nrhi::TextureView* views[8] = {d.diffuse ? d.diffuse : g.white_view,
                                    d.lightmap ? d.lightmap : g.white_view,
-                                   d.chroma ? d.chroma : g.white_view};
-    cmd->SetTextures(1, views, 3);
+                                   d.chroma ? d.chroma : g.white_view,
+                                   d.material[0] ? d.material[0] : g.white_view,
+                                   d.material[1] ? d.material[1] : g.white_view,
+                                   d.material[2] ? d.material[2] : g.white_view,
+                                   d.material[3] ? d.material[3] : g.white_view,
+                                   d.material[4] ? d.material[4] : g.white_view};
+    cmd->SetTextures(1, views, 8);
+    cmd->SetTexture(2, shadow_drawn ? g.shadow_view : g.white_view);
     if (&m != bound_mesh) {
       cmd->SetVertexBuffer(m.vb, 0, m.vb_bytes, kVertexFloats * 4);
       cmd->SetIndexBuffer(m.ib, 0, m.ib_bytes);
@@ -1172,10 +1489,12 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
   cmd->FlushBarriers();
   if (++g.frames % 300 == 1 || g.frames == 90) {
     REXLOG_INFO("Native world: {} entries, {} draws ({} textured, {} with game state, {} "
-                "alpha-tested, {} blended), {} meshes ({} failed), {} textures ({} failed), "
+                "alpha-tested, {} blended), {} meshes ({} failed), {} textures ({} failed, {} "
+                "re-decoded), "
                 "{} built now; {} entities, {} entity draws",
                 frame.entries.size(), drawn, textured, matched, alpha_tested, blended,
-                g.meshes.size(), g.failed_meshes, g.textures.size(), g.failed_textures, builds,
+                g.meshes.size(), g.failed_meshes, g.textures.size(), g.failed_textures,
+                g.redecoded_textures, builds,
                 frame.entities.size(), entity_drawn);
   }
   return true;
