@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace rex::graphics::nrhi {
 class Cmd;
@@ -33,6 +34,12 @@ bool ReadNativeTextureFetch(uint8_t* base, uint32_t texture, uint32_t words[6]);
 // Average colour of each face of a guest environment cube (+X, -X, +Y, -Y,
 // +Z, -Z); false when the texture is not a DXT1/8888 cube.
 bool NativeCubeFaceAverages(uint8_t* base, uint32_t texture, float out[6][4]);
+
+// A guest 3D colour table (k_8_8_8_8, n x n x n, n <= 64) given by its fetch
+// constant, unrolled into an RGBA8 atlas of n slices side by side (n*n x n,
+// texel (x + z*n, y)). False for other formats or unreadable data.
+bool NativeLutAtlas(uint8_t* base, const uint32_t words[6], std::vector<uint8_t>& rgba,
+                    uint32_t& n);
 
 bool DecodeNativeTextureObject(rex::graphics::nrhi::Device* device,
                                rex::graphics::nrhi::Cmd* cmd, uint8_t* base, uint32_t texture,

@@ -398,3 +398,49 @@ bool NativeCubeFaceAverages(uint8_t* base, uint32_t texture, float out[6][4]) {
   }
   return true;
 }
+
+bool NativeLutAtlas(uint8_t* base, const uint32_t words[6], std::vector<uint8_t>& rgba,
+                    uint32_t& n) {
+  xenos::xe_gpu_texture_fetch_t fetch = {};
+  fetch.dword_0 = words[0];
+  fetch.dword_1 = words[1];
+  fetch.dword_2 = words[2];
+  fetch.dword_3 = words[3];
+  fetch.dword_4 = words[4];
+  fetch.dword_5 = words[5];
+  if (fetch.type != xenos::FetchConstantType::kTexture || fetch.base_address == 0) return false;
+  rex::graphics::TextureInfo info;
+  if (!rex::graphics::TextureInfo::Prepare(fetch, &info)) return false;
+  if (info.dimension != xenos::DataDimension::k3D ||
+      rex::graphics::GetBaseFormat(info.format) != xenos::TextureFormat::k_8_8_8_8 ||
+      info.memory.base_address == 0) {
+    return false;
+  }
+  n = info.width + 1u;
+  if (n < 2 || n > 64 || info.height + 1u != n || info.depth + 1u != n) return false;
+  const uint32_t pitch = info.extent.block_pitch_h, height = info.extent.block_pitch_v;
+  const uint32_t size = info.memory.base_size;
+  if (size == 0 || size > 4u * 1024u * 1024u) return false;
+  std::vector<uint8_t> data(size);
+  if (!TryCopy(data.data(), base + (0xA0000000u | info.memory.base_address), size)) return false;
+  rgba.assign(size_t(n) * n * n * 4, 0);
+  for (uint32_t z = 0; z < n; ++z) {
+    for (uint32_t y = 0; y < n; ++y) {
+      for (uint32_t x = 0; x < n; ++x) {
+        const uint32_t offset =
+            info.is_tiled ? uint32_t(rex::graphics::texture_util::GetTiledOffset3D(
+                                int32_t(x), int32_t(y), int32_t(z), pitch, height, 2))
+                          : ((z * height + y) * pitch + x) * 4;
+        if (offset + 4 > size) return false;
+        // 8888 with the game's swizzle: ARGB in a big-endian word.
+        const uint8_t* b = data.data() + offset;
+        uint8_t* o = rgba.data() + (size_t(y) * n * n + size_t(z) * n + x) * 4;
+        o[0] = b[1];
+        o[1] = b[2];
+        o[2] = b[3];
+        o[3] = b[0];
+      }
+    }
+  }
+  return true;
+}

@@ -47,6 +47,10 @@ REXCVAR_DEFINE_INT32(skate2_native_lm_mode, 0, "Skate2",
     .range(0, 9)
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(skate2_native_lens, true, "Skate2",
+                    "Native world: the game's lens pass (barrel distortion and vignette)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_BOOL(skate2_native_world, false, "Skate2",
                     "Experimental: draw the world natively (untextured, first stage)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
@@ -253,6 +257,22 @@ struct Gpu {
   uint32_t failed_meshes = 0;
   uint32_t failed_textures = 0;
   uint32_t redecoded_textures = 0;
+  // Lens pass (EnsurePost): the world is drawn into `scene` first.
+  nrhi::BindingLayout* post_layout = nullptr;
+  nrhi::Shader* post_vs = nullptr;
+  nrhi::Shader* post_ps = nullptr;
+  nrhi::Pipeline* post_pipeline = nullptr;
+  nrhi::Format post_format = nrhi::Format::kUnknown;
+  nrhi::Texture* scene = nullptr;
+  nrhi::TextureView* scene_view = nullptr;
+  uint32_t scene_width = 0, scene_height = 0;
+  nrhi::Format scene_format = nrhi::Format::kUnknown;
+  NativeTexture vignette;
+  uint32_t vignette_fetch[6] = {};
+  bool vignette_tried = false;
+  NativeTexture lut;  // grading table atlas; width = table size n
+  uint32_t lut_fetch[6] = {};
+  bool lut_tried = false;
 } g;
 
 nrhi::Buffer* UploadBuffer(nrhi::Device* device, const void* data, uint32_t bytes) {
@@ -1011,6 +1031,162 @@ nrhi::Pipeline* GetPipeline(nrhi::Format color_format, const NativeDrawState& st
   return slot;
 }
 
+// The game's final composite and lens passes (post.hlsl): the world is drawn
+// into g.scene, then graded, distorted and vignetted into the guest output
+// with the constants of the game's own draws.
+constexpr uint32_t kPostConstantFloats = 40;  // see post.hlsl cbuffer C
+
+bool EnsurePost(nrhi::Format format, uint32_t width, uint32_t height) {
+  if (!g.post_layout) {
+    nrhi::BindingLayoutDesc layout;
+    layout.params[0].kind = nrhi::BindingParamKind::kConstants;
+    layout.params[0].shader_register = 0;
+    layout.params[0].count = kPostConstantFloats;
+    layout.params[0].visibility = nrhi::Visibility::kPixel;
+    layout.params[1].kind = nrhi::BindingParamKind::kTextureTable;
+    layout.params[1].shader_register = 0;
+    layout.params[1].count = 3;
+    layout.params[1].visibility = nrhi::Visibility::kPixel;
+    layout.param_count = 2;
+    layout.static_samplers[0].shader_register = 0;
+    layout.static_samplers[0].filter = nrhi::Filter::kLinear;
+    layout.static_samplers[0].address = nrhi::AddressMode::kClamp;
+    layout.static_sampler_count = 1;
+    g.post_layout = g.device->CreateBindingLayout(layout);
+    namespace sh = skate2::native_shaders;
+    nrhi::ShaderDesc vs;
+    vs.stage = nrhi::ShaderStage::kVertex;
+    vs.name = "post_vs";
+    vs.hlsl_source = sh::kPostHlsl;
+    vs.entry_point = "vs_main";
+    vs.spirv = sh::kPostVs;
+    vs.spirv_size_bytes = sizeof(sh::kPostVs);
+    g.post_vs = g.device->CreateShader(vs);
+    nrhi::ShaderDesc ps = vs;
+    ps.stage = nrhi::ShaderStage::kPixel;
+    ps.name = "post_ps";
+    ps.entry_point = "ps_main";
+    ps.spirv = sh::kPostPs;
+    ps.spirv_size_bytes = sizeof(sh::kPostPs);
+    g.post_ps = g.device->CreateShader(ps);
+  }
+  if (!g.post_layout || !g.post_vs || !g.post_ps) return false;
+  if (g.post_pipeline && g.post_format != format) {
+    g.device->DestroyDeferred(g.post_pipeline);
+    g.post_pipeline = nullptr;
+  }
+  if (!g.post_pipeline) {
+    nrhi::GraphicsPipelineDesc desc;
+    desc.layout = g.post_layout;
+    desc.vs = g.post_vs;
+    desc.ps = g.post_ps;
+    desc.depth.test_enable = false;
+    desc.depth.write_enable = false;
+    desc.cull = nrhi::CullMode::kNone;
+    desc.blend.write_mask = 0xF;
+    desc.rtv_format = format;
+    desc.dsv_format = nrhi::Format::kUnknown;
+    g.post_pipeline = g.device->CreateGraphicsPipeline(desc);
+    g.post_format = format;
+    if (!g.post_pipeline) return false;
+  }
+  if (g.scene && (g.scene_width != width || g.scene_height != height ||
+                  g.scene_format != format)) {
+    if (g.scene_view) g.device->DestroyDeferred(g.scene_view);
+    g.device->DestroyDeferred(g.scene);
+    g.scene = nullptr;
+    g.scene_view = nullptr;
+  }
+  if (!g.scene) {
+    nrhi::TextureDesc desc;
+    desc.width = width;
+    desc.height = height;
+    desc.format = format;
+    desc.usage = nrhi::kTextureUsageRenderTarget;
+    desc.initial_state = nrhi::ResourceState::kPixelShaderResource;
+    g.scene = g.device->CreateTexture(desc);
+    if (!g.scene) return false;
+    nrhi::TextureViewDesc view;
+    g.scene_view = g.device->CreateTextureView(g.scene, view);
+    g.scene_width = width;
+    g.scene_height = height;
+    g.scene_format = format;
+  }
+  return g.scene_view != nullptr;
+}
+
+// The lens pass's vignette texture (tf2 of the game's draw), decoded again
+// only when its fetch constant changes; nullptr while unavailable.
+nrhi::TextureView* VignetteView(nrhi::Cmd* cmd, uint8_t* base, const uint32_t words[6]) {
+  if (g.vignette_tried && std::memcmp(g.vignette_fetch, words, sizeof(g.vignette_fetch)) == 0) {
+    return g.vignette.view;
+  }
+  g.vignette_tried = true;
+  std::memcpy(g.vignette_fetch, words, sizeof(g.vignette_fetch));
+  NativeTexture t;
+  if (!DecodeNativeTexture(g.device, cmd, base, words, t)) {
+    REXLOG_WARN("Native world: lens vignette texture not decodable");
+    return g.vignette.view;  // keep the previous one, if any
+  }
+  if (g.vignette.view) g.device->DestroyDeferred(g.vignette.view);
+  if (g.vignette.texture) g.device->DestroyDeferred(g.vignette.texture);
+  g.vignette = t;
+  return g.vignette.view;
+}
+
+// The composite's colour grading table as a slice atlas (NativeLutAtlas),
+// rebuilt when its fetch constant changes; nullptr while unavailable.
+nrhi::TextureView* GradeView(nrhi::Cmd* cmd, uint8_t* base, const uint32_t words[6]) {
+  if (g.lut_tried && std::memcmp(g.lut_fetch, words, sizeof(g.lut_fetch)) == 0) {
+    return g.lut.view;
+  }
+  g.lut_tried = true;
+  std::memcpy(g.lut_fetch, words, sizeof(g.lut_fetch));
+  std::vector<uint8_t> rgba;
+  uint32_t n = 0;
+  if (!NativeLutAtlas(base, words, rgba, n)) {
+    REXLOG_WARN("Native world: colour grading table not decodable");
+    return g.lut.view;
+  }
+  nrhi::TextureDesc desc;
+  desc.width = n * n;
+  desc.height = n;
+  desc.format = nrhi::Format::kR8G8B8A8_UNORM;
+  desc.initial_state = nrhi::ResourceState::kCopyDest;
+  nrhi::Texture* texture = g.device->CreateTexture(desc);
+  if (!texture) return g.lut.view;
+  const uint32_t row = (n * n * 4 + nrhi::kRowPitchAlignment - 1) & ~(nrhi::kRowPitchAlignment - 1);
+  nrhi::BufferDesc up;
+  up.size = uint64_t(row) * n;
+  up.heap = nrhi::HeapKind::kUpload;
+  up.bind_class = nrhi::BufferBindClass::kCopySrc;
+  nrhi::Buffer* upload = g.device->CreateBuffer(up);
+  if (!upload) {
+    g.device->DestroyDeferred(texture);
+    return g.lut.view;
+  }
+  uint8_t* px = static_cast<uint8_t*>(g.device->Map(upload));
+  for (uint32_t y = 0; y < n; ++y) {
+    std::memcpy(px + size_t(y) * row, rgba.data() + size_t(y) * n * n * 4, size_t(n) * n * 4);
+  }
+  g.device->Unmap(upload);
+  cmd->CopyBufferToTexture(texture, 0, 0, upload, 0, row, n * n, n, 1);
+  cmd->Barrier(texture, nrhi::ResourceState::kCopyDest, nrhi::ResourceState::kPixelShaderResource);
+  g.device->DestroyDeferred(upload);
+  nrhi::TextureViewDesc view;
+  nrhi::TextureView* v = g.device->CreateTextureView(texture, view);
+  if (!v) {
+    g.device->DestroyDeferred(texture);
+    return g.lut.view;
+  }
+  if (g.lut.view) g.device->DestroyDeferred(g.lut.view);
+  if (g.lut.texture) g.device->DestroyDeferred(g.lut.texture);
+  g.lut.texture = texture;
+  g.lut.view = v;
+  g.lut.width = n;
+  return g.lut.view;
+}
+
 bool EnsureDepth(uint32_t width, uint32_t height) {
   if (g.depth && g.width == width && g.height == height) return true;
   if (g.depth) g.device->DestroyDeferred(g.depth);
@@ -1126,7 +1302,8 @@ void NativeWorldOnSwap() {
 // Builds every pipeline variant once, as soon as the device and the output
 // format are known (menus), so turning the native world on or meeting a new
 // state combination in play never compiles a pipeline mid-frame.
-void WarmPipelines(nrhi::Device* device, nrhi::Format format) {
+void WarmPipelines(nrhi::Device* device, nrhi::Format format, uint32_t width,
+                   uint32_t height) {
   static bool warmed = false;
   if (warmed || !device || format == nrhi::Format::kUnknown) return;
   g.device = device;
@@ -1143,12 +1320,20 @@ void WarmPipelines(nrhi::Device* device, nrhi::Format format) {
       }
     }
   }
+  // Sun shadows and the post pass too: built on first use they hitch the
+  // first native frames on the Deck.
+  if (EnsureEntityShaders()) GetEntityShadowPipeline();
+  EnsureShadow();
+  EnsurePost(format, width, height);
   warmed = true;
-  REXLOG_INFO("Native world: {} pipeline variants built", 2 * 3 * 3 * 2);
+  REXLOG_INFO("Native world: {} pipeline variants built", 2 * 3 * 3 * 2 + 2);
 }
 
 void NativeWorldPrepare(const rex::graphics::NativeGuestOutputRenderContext& context) {
-  if (context.guest_output) WarmPipelines(context.device, context.guest_output->format());
+  if (context.guest_output) {
+    WarmPipelines(context.device, context.guest_output->format(),
+                  context.guest_output->width(), context.guest_output->height());
+  }
 }
 
 bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& context,
@@ -1359,13 +1544,28 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
     shadow_drawn = true;
   }
 
+  // The game's lens pass, when its draw was seen: the world goes to g.scene.
+  nrhi::TextureView* vignette = nullptr;
+  if (REXCVAR_GET(skate2_native_lens) && sfc.lens_valid &&
+      EnsurePost(out->format(), width, height)) {
+    vignette = VignetteView(cmd, base, sfc.lens_vignette);
+  }
+  nrhi::TextureView* lut =
+      vignette && sfc.grade_valid ? GradeView(cmd, base, sfc.grade_lut) : nullptr;
+  nrhi::Texture* target = vignette ? g.scene : out;
+
   // Phase 2: the world pass, opaque (and alpha-tested) first, then blended in
   // draw-list order.
-  cmd->Barrier(out, nrhi::ResourceState::kGuestOutput, nrhi::ResourceState::kRenderTarget);
+  if (vignette) {
+    cmd->Barrier(g.scene, nrhi::ResourceState::kPixelShaderResource,
+                 nrhi::ResourceState::kRenderTarget);
+  } else {
+    cmd->Barrier(out, nrhi::ResourceState::kGuestOutput, nrhi::ResourceState::kRenderTarget);
+  }
   cmd->FlushBarriers();
-  cmd->SetRenderTargets(out, g.depth);
+  cmd->SetRenderTargets(target, g.depth);
   const float sky[4] = {0.52f, 0.66f, 0.82f, 1.0f};
-  cmd->ClearRenderTarget(out, sky);
+  cmd->ClearRenderTarget(target, sky);
   cmd->ClearDepth(g.depth, 1.0f);
   nrhi::Viewport viewport;
   viewport.width = float(width);
@@ -1485,6 +1685,31 @@ bool NativeWorldRender(const rex::graphics::NativeGuestOutputRenderContext& cont
   bound_mesh = nullptr;
   for (const Item& d : blended_items) draw(d);
   draw_entities(true);
+  if (vignette) {
+    cmd->Barrier(g.scene, nrhi::ResourceState::kRenderTarget,
+                 nrhi::ResourceState::kPixelShaderResource);
+    cmd->Barrier(out, nrhi::ResourceState::kGuestOutput, nrhi::ResourceState::kRenderTarget);
+    cmd->FlushBarriers();
+    cmd->SetRenderTargets(out, nullptr);
+    cmd->SetViewport(viewport);
+    cmd->SetScissor(scissor);
+    cmd->SetBindingLayout(g.post_layout);
+    cmd->SetPipeline(g.post_pipeline);
+    float post[kPostConstantFloats] = {};
+    std::memcpy(post, sfc.lens, sizeof(sfc.lens));
+    if (sfc.grade_valid) {
+      std::memcpy(post + 16, sfc.grade, sizeof(sfc.grade));
+    } else {
+      post[28] = 1.0f;  // scene scale 1, no table
+    }
+    post[36] = lut ? 1.0f : 0.0f;
+    post[37] = float(g.lut.width);
+    cmd->SetRootConstants(0, kPostConstantFloats, post, 0);
+    nrhi::TextureView* post_views[3] = {g.scene_view, vignette, lut ? lut : g.white_view};
+    cmd->SetTextures(1, post_views, 3);
+    cmd->SetPrimitiveTopology(nrhi::PrimitiveTopology::kTriangleList);
+    cmd->Draw(3, 0);
+  }
   cmd->Barrier(out, nrhi::ResourceState::kRenderTarget, nrhi::ResourceState::kGuestOutput);
   cmd->FlushBarriers();
   if (++g.frames % 300 == 1 || g.frames == 90) {

@@ -27,6 +27,8 @@ SHADERS = [
     ("world.hlsl", "ps_main", "ps_6_0", "kWorldPs"),
     ("entity.hlsl", "vs_main", "vs_6_0", "kEntityVs"),
     ("entity.hlsl", "ps_main", "ps_6_0", "kEntityPs"),
+    ("post.hlsl", "vs_main", "vs_6_0", "kPostVs"),
+    ("post.hlsl", "ps_main", "ps_6_0", "kPostPs"),
 ]
 FLAGS = ["-spirv", "-fspv-target-env=vulkan1.1", "-O3"]
 

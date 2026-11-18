@@ -34,6 +34,18 @@ struct NativeFrameConstants {
   // c1.zw, depth c3.p.
   bool shadow_valid = false;
   float shadow[16] = {};
+  // The game's final lens pass (pixel shader 9D5F41FC68105CB5, seen in the
+  // last two frames): PS c0, c1, c254, c255 and the vignette texture's fetch
+  // constant (tf2, six words).
+  bool lens_valid = false;
+  float lens[16] = {};
+  uint32_t lens_vignette[6] = {};
+  // The game's final composite (pixel shader E063C9ADE96048FB, last two
+  // frames): PS c0..c2 (grading matrix rows), c254 (x: scene scale), c255
+  // (table coordinate scale/offset) and the 32^3 table's fetch constant (tf4).
+  bool grade_valid = false;
+  float grade[20] = {};
+  uint32_t grade_lut[6] = {};
 };
 
 // Registers the observer with the SDK (OnPreSetup).

@@ -34,6 +34,11 @@ constexpr uint64_t kWorldPixelShader = 0x5D2EA5FF45C0BC9Aull;
 // sun direction.
 constexpr uint64_t kMaterialVertexShader = 0xE5C957221BEF0ECDull;
 constexpr uint64_t kMaterialPixelShader = 0xF8D56B275E4DE57Bull;
+// The final lens pass: barrel distortion of the scene and a vignette texture.
+constexpr uint64_t kLensPixelShader = 0x9D5F41FC68105CB5ull;
+// The final composite before it: scene * c254.x + bloom, then a 3D colour
+// grading table.
+constexpr uint64_t kGradePixelShader = 0xE063C9ADE96048FBull;
 
 struct Entry {
   NativeDrawState state;
@@ -58,6 +63,8 @@ uint32_t g_frame = 1;
 std::vector<std::pair<uint32_t, uint32_t>> g_pitch_counts;
 uint32_t g_main_pitch = 0;
 NativeFrameConstants g_constants;
+uint32_t g_lens_frame = 0;
+uint32_t g_grade_frame = 0;
 
 NativeDrawState::Cull CullFromMode(uint32_t mode) {
   const bool cull_front = mode & 1, cull_back = mode & 2;
@@ -70,6 +77,22 @@ NativeDrawState::Cull CullFromMode(uint32_t mode) {
 }
 
 void Observe(const rex::graphics::NativeEmulatedDraw& d, void* /*user_data*/) {
+  if (d.pixel_shader_hash == kLensPixelShader && d.ps_constants && d.fetch_constants) {
+    std::memcpy(g_constants.lens, d.ps_constants, sizeof(float) * 8);
+    std::memcpy(g_constants.lens + 8, d.ps_constants + 254 * 4, sizeof(float) * 8);
+    std::memcpy(g_constants.lens_vignette, d.fetch_constants + 2 * 6,
+                sizeof(g_constants.lens_vignette));
+    g_constants.lens_valid = true;
+    g_lens_frame = g_frame;
+  }
+  if (d.pixel_shader_hash == kGradePixelShader && d.ps_constants && d.fetch_constants) {
+    std::memcpy(g_constants.grade, d.ps_constants, sizeof(float) * 12);
+    std::memcpy(g_constants.grade + 12, d.ps_constants + 254 * 4, sizeof(float) * 8);
+    std::memcpy(g_constants.grade_lut, d.fetch_constants + 4 * 6,
+                sizeof(g_constants.grade_lut));
+    g_constants.grade_valid = true;
+    g_grade_frame = g_frame;
+  }
   if (!d.pixel_shader_hash || (d.color_mask & 0xF) == 0 || !d.vertex_buffer) return;
   bool counted = false;
   for (auto& p : g_pitch_counts) {
@@ -161,6 +184,8 @@ void NativeDrawStateNewFrame() {
   }
   g_pitch_counts.clear();
   ++g_frame;
+  if (g_frame - g_lens_frame > 2) g_constants.lens_valid = false;
+  if (g_frame - g_grade_frame > 2) g_constants.grade_valid = false;
   // World streaming reuses buffer addresses: drop stale entries now and then.
   if (g_wanted.size() > 4096) g_wanted.clear();
   if (g_constants_by_draw.size() > 512) {
